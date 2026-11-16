@@ -1,0 +1,35 @@
+# https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[package]
+name = "bevy_data_registry"
+description = "Data definitions for Bevy: RON files loaded by kind, indexed by id, validated and hot-reloaded"
+keywords = ["bevy", "data", "definitions", "ron", "assets"]
+readme = "README.md"
+
+version = { workspace = true }
+rust-version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+authors = { workspace = true }
+repository = { workspace = true }
+
+[features]
+# Development: hot-reload definitions when their files change.
+dev = ["bevy/file_watcher"]
+
+[dependencies]
+# Game engine
+bevy = { workspace = true, features = ["bevy_asset", "bevy_log", "bevy_state"] }
+bevy_common_assets = { workspace = true, features = ["ron"] }
+
+# (De)serialization
+ron = { workspace = true, features = [] }
+serde = { workspace = true, features = [] }
+
+[dev-dependencies]
+bevy_harness = { workspace = true }
+
+[lints]
+workspace = true
