@@ -87,6 +87,7 @@ fn definitions_load_index_and_come_whole(app: &mut TestApp) {
         );
         let mut ids: Vec<&String> = things.iter().map(|(id, _)| id).collect();
         ids.sort();
-        assert_eq!(ids, ["boulder", "flint", "pebble"]);
+        assert_eq!(ids, ["boulder", "flint", "gravel", "pebble"]);
+        assert_eq!(weight("gravel"), Some(1), "in a folder named as a file");
     });
 }

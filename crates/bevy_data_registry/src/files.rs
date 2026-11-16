@@ -1,7 +1,9 @@
 //! Definitions files: which kind each holds ([`kind_of`]), and listing them
 //! under the definitions' root.
 
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bevy::asset::AssetServerMode;
 use bevy::asset::io::{AssetReaderError, AssetSourceId, ErasedAssetReader};
@@ -41,11 +43,21 @@ pub fn kind_of<'a>(path: &Path, folders: &[&'a str]) -> Option<&'a str> {
     })
 }
 
+/// How many folders deep definitions are looked for: deeper is taken for
+/// a folder linking back to one it's in.
+const MAX_DEPTH: usize = 32;
+
 /// Returns the `.ron` files inside `folder` and its subfolders, sorted by
 /// path.
 ///
 /// Lists through the same reader the asset server loads from: the source
-/// when unprocessed, the processed source when processed.
+/// when unprocessed, the processed source when processed. A folder is a
+/// folder whatever it's named, `.ron` included.
+///
+/// # Errors
+///
+/// What the reader says; or, folders deeper than [`MAX_DEPTH`], an error
+/// saying so, as a folder linking back to one it's in would go on.
 pub(crate) async fn list_ron_files(
     asset_server: &AssetServer,
     folder: &Path,
@@ -60,14 +72,20 @@ pub(crate) async fn list_ron_files(
             .expect("processed mode always has a processed reader"),
     };
     let mut paths = Vec::new();
-    let mut folders = vec![folder.to_path_buf()];
-    while let Some(folder) = folders.pop() {
+    let mut folders = vec![(folder.to_path_buf(), 0)];
+    while let Some((folder, depth)) = folders.pop() {
+        if depth > MAX_DEPTH {
+            return Err(AssetReaderError::Io(Arc::new(io::Error::other(format!(
+                "{} is more than {MAX_DEPTH} folders deep: does a folder link back to one it's in?",
+                folder.display()
+            )))));
+        }
         let mut stream = reader.read_directory(&folder).await?;
         while let Some(path) = stream.next().await {
-            if path.extension().is_some_and(|ext| ext == "ron") {
+            if reader.is_directory(&path).await? {
+                folders.push((path, depth + 1));
+            } else if path.extension().is_some_and(|ext| ext == "ron") {
                 paths.push(path);
-            } else if reader.is_directory(&path).await? {
-                folders.push(path);
             }
         }
     }

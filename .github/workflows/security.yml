@@ -1,26 +1,15 @@
 name: Security
 
+# Every change, whatever it touches: a secret can be committed in any file.
 on:
   push:
     branches:
       - "main"
       - "release"
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
-      - ".github/workflows/security.yml"
   pull_request:
     branches:
       - "main"
       - "release"
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
-      - ".github/workflows/security.yml"
   schedule:
     - cron: "0 6 * * 1" # Weekly on Monday at 6 AM
   workflow_dispatch:

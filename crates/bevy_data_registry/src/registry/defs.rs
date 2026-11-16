@@ -23,7 +23,7 @@ impl<T: Definition> Defs<'_, T> {
         }
         self.registry
             .whole(id)
-            .or_else(|| self.resolve(self.registry.location(id)?))
+            .or_else(|| self.resolve(id, self.registry.location(id)?))
     }
 
     /// Iterates over all loaded definitions of this kind, whole, families
@@ -33,12 +33,22 @@ impl<T: Definition> Defs<'_, T> {
             .iter()
             .filter(|(id, _)| !self.registry.is_family(id))
             .filter_map(|(id, location)| {
-                let def = self.registry.whole(id).or_else(|| self.resolve(location))?;
+                let def = self
+                    .registry
+                    .whole(id)
+                    .or_else(|| self.resolve(id, location))?;
                 Some((id, def))
             })
     }
 
-    fn resolve(&self, location: &Location<T>) -> Option<&T> {
-        self.assets.get(&location.handle)?.0.get(location.index)
+    /// The definition at `location`, if it's still `id`'s: a file changed
+    /// on disk is loaded before it's indexed again, and what's at its
+    /// index may be another definition till then.
+    fn resolve(&self, id: &T::Id, location: &Location<T>) -> Option<&T> {
+        self.assets
+            .get(&location.handle)?
+            .0
+            .get(location.index)
+            .filter(|def| def.id() == id)
     }
 }

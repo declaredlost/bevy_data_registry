@@ -83,7 +83,11 @@ pub struct Merged<T: Definition> {
 /// base that isn't there, bases that come round to themselves. What
 /// builds on nothing isn't in it: it's whole as written.
 pub fn resolve<T: FamilyDefinition>(defs: &[&T]) -> Merged<T> {
-    let by_id: HashMap<&T::Id, &T> = defs.iter().map(|def| (def.id(), *def)).collect();
+    // The first of an id used twice, as the registry keeps.
+    let mut by_id: HashMap<&T::Id, &T> = HashMap::default();
+    for &def in defs {
+        by_id.entry(def.id()).or_insert(def);
+    }
     let mut whole: HashMap<T::Id, T> = HashMap::default();
     let mut errors = Vec::new();
     for &def in defs {
@@ -200,5 +204,16 @@ mod tests {
         assert_eq!(merged.errors.len(), 3, "{:?}", merged.errors);
         assert!(merged.errors.iter().any(|error| error.contains("nobody")));
         assert!(merged.errors.iter().any(|error| error.contains("itself")));
+    }
+
+    #[test]
+    fn an_id_used_twice_builds_on_the_first() {
+        let things = [
+            thing("base", None, Some(1)),
+            thing("base", None, Some(2)),
+            thing("child", Some("base"), None),
+        ];
+        let refs: Vec<&Thing> = things.iter().collect();
+        assert_eq!(resolve(&refs).whole["child"].value, Some(1));
     }
 }

@@ -1,0 +1,2 @@
+// A folder, though it's named as a file: searched, not loaded.
+(id: "gravel", weight: 1)
