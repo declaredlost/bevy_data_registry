@@ -67,31 +67,6 @@ impl DataFile {
         })
     }
 
-    /// A file of `defs`, as if read, with `names` read in it.
-    #[cfg(test)]
-    pub(crate) fn of_defs_named<T: Definition>(defs: Vec<T>, names: Names) -> Self {
-        Self {
-            names,
-            ..Self::of_defs(defs)
-        }
-    }
-
-    /// A file of `defs`, as if read.
-    #[cfg(test)]
-    pub(crate) fn of_defs<T: Definition>(defs: Vec<T>) -> Self {
-        let entries = defs
-            .into_iter()
-            .map(|def| Entry {
-                kind: TypeId::of::<T>(),
-                value: Arc::new(def),
-            })
-            .collect();
-        Self {
-            entries,
-            names: Names::default(),
-        }
-    }
-
     /// Its definition at `at`, if it's of kind `T`.
     pub(crate) fn get<T: Definition>(&self, at: usize) -> Option<&T> {
         self.entries.get(at)?.value.downcast_ref()
@@ -117,6 +92,11 @@ impl fmt::Debug for DataFile {
 pub(crate) struct Kinds(Arc<RwLock<Vec<Kind>>>);
 
 impl Kinds {
+    /// Whether kind `T` is added.
+    pub(crate) fn has<T: Definition>(&self) -> bool {
+        self.read().iter().any(|kind| kind.id == TypeId::of::<T>())
+    }
+
     /// Every kind, read.
     pub(crate) fn read(&self) -> std::sync::RwLockReadGuard<'_, Vec<Kind>> {
         self.0.read().unwrap_or_else(PoisonError::into_inner)
@@ -414,11 +394,28 @@ fn parse(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use serde::Deserialize;
 
     use super::*;
     use crate::format::Ron;
+
+    /// A file of `defs`, as if read.
+    pub(crate) fn of_defs<T: Definition>(defs: Vec<T>) -> DataFile {
+        of_defs_named(defs, Names::default())
+    }
+
+    /// A file of `defs`, as if read, with `names` read in it.
+    pub(crate) fn of_defs_named<T: Definition>(defs: Vec<T>, names: Names) -> DataFile {
+        let entries = defs
+            .into_iter()
+            .map(|def| Entry {
+                kind: TypeId::of::<T>(),
+                value: Arc::new(def),
+            })
+            .collect();
+        DataFile { entries, names }
+    }
 
     #[derive(crate::Definition, Debug, Deserialize)]
     #[definition(file = "tags")]

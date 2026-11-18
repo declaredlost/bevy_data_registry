@@ -47,7 +47,10 @@ at any depth, is read.
   kind. As a kind's own id, and as a reference to another definition
   (`drops: Vec<Id<Item>>`), every one but the id, the base and
   `#[definition(unchecked)]` fields checked to name a definition `get`
-  finds, its field named in the error (`finds.tag`). It shows as its hash; `Definitions::name`
+  finds, its field named in the error (`finds.tag`). Checked are what
+  `get` gives and the families as written; one naming a definition whose
+  base doesn't resolve isn't reported again (that's an error already), and
+  `get` may not find it after a reload. It shows as its hash; `Definitions::name`
   gives the name it was read from. Two names of a kind with one hash are
   an error. Any other id type works too (`String`), unchecked.
 - **Reading**: `Definitions<T>`, a system param, as `Assets<T>` is: `get`,

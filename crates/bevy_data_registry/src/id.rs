@@ -40,8 +40,15 @@ use serde::{Deserialize, Deserializer};
 /// marked `#[definition(unchecked)]`, is checked once every kind is
 /// indexed, as one of [`DataSystems::Validate`](crate::DataSystems::Validate):
 /// it must name a definition [`Definitions::get`](crate::Definitions::get)
-/// finds, not nothing and not a family (families are only built on). What's
-/// checked is what `get` gives: whole, or kept from before a reload. Two
+/// finds, not nothing and not a family (families are only built on). One
+/// naming a definition whose own base doesn't resolve isn't reported again:
+/// that's an error already. Only `Id`s the walk reaches are checked: those
+/// in fields of a type that's [`References`](crate::References), as its
+/// docs say.
+///
+/// What's checked is what `get` gives (whole, or kept from before a
+/// reload), and the families as written: a family's reference to nothing
+/// is an error, even if every definition built on it says otherwise. Two
 /// names of a kind with the same hash are an error too: one needs
 /// renaming.
 ///
@@ -174,6 +181,12 @@ impl<T: 'static> Visitor<'_> for Named<T> {
     }
 }
 
+/// `name` as a message shows it: on one line, a line break in it escaped,
+/// so it can't pass for another message.
+pub(crate) fn escaped(name: &str) -> String {
+    name.escape_debug().to_string()
+}
+
 /// `T`'s name, without its path: `Item`.
 pub(crate) fn short_type_name<T: ?Sized>() -> &'static str {
     let name = core::any::type_name::<T>();
@@ -220,7 +233,7 @@ impl Names {
     /// read, as an [`Id`] shows if not.
     pub fn show(&self, kind: TypeId, hash: u64) -> String {
         self.get(kind, hash)
-            .map_or_else(|| format!("#{hash:016x}"), ToOwned::to_owned)
+            .map_or_else(|| format!("#{hash:016x}"), escaped)
     }
 
     /// Every name of an id of `kind`, with its hash: those colliding too.
@@ -312,6 +325,8 @@ mod tests {
         let all: Vec<&str> = names.of(item).map(|(_, name)| name).collect();
         assert_eq!(all, ["sword", "axe"]);
         assert_eq!(names.show(item, 8), "#0000000000000008");
+        names.keep(item, 9, "two\nlines");
+        assert_eq!(names.show(item, 9), "two\\nlines", "on one line");
     }
 
     #[test]

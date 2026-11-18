@@ -28,6 +28,9 @@ pub struct Registry<T: Definition> {
     references: fn(&T, &mut Referenced),
     /// The ids of its families, as last indexed.
     family_ids: HashSet<T::Id>,
+    /// Those kept from before a reload, as their bases stopped resolving,
+    /// with the path of the file they were read from then.
+    kept: HashMap<T::Id, AssetPath<'static>>,
     /// Where each id is first, families included.
     locations: HashMap<T::Id, Location>,
     /// What's read: the first of each id, whole; not the families, nor
@@ -58,7 +61,10 @@ pub(crate) enum Target {
 /// every [`Id`](crate::Id) in it but its own and its base.
 pub(crate) struct Referencing {
     pub id: String,
+    /// The path of the file it was read from: as kept, if it was.
     pub path: AssetPath<'static>,
+    /// Whether it's kept from before a reload, its bases since broken.
+    pub kept: bool,
     /// Its file, for the names its references were read from.
     pub file: AssetId<DataFile>,
     pub references: Vec<Reference>,
@@ -96,6 +102,7 @@ impl<T: Definition> Registry<T> {
             families,
             references,
             family_ids: HashSet::default(),
+            kept: HashMap::default(),
             locations: HashMap::default(),
             defs: HashMap::default(),
             names: HashMap::default(),
@@ -132,9 +139,11 @@ impl<T: Definition> Registry<T> {
                 };
                 let mut to = Referenced::default();
                 (self.references)(def, &mut to);
+                let kept = self.kept.get(id);
                 Some(Referencing {
                     id: self.label(id),
-                    path: location.path.clone(),
+                    path: kept.unwrap_or(&location.path).clone(),
+                    kept: kept.is_some(),
                     file: location.file,
                     references: to.into_found(),
                 })
@@ -152,7 +161,7 @@ impl<T: Definition> Registry<T> {
     /// `id` for messages: by its name if it has one, as it shows if not.
     fn label(&self, id: &T::Id) -> String {
         self.name(id)
-            .map_or_else(|| id.to_string(), ToOwned::to_owned)
+            .map_or_else(|| id.to_string(), crate::id::escaped)
     }
 
     /// Keeps the names of the kind's [`Id`]s read in `files`; returns two
@@ -203,7 +212,13 @@ impl<T: Definition> Registry<T> {
 
         let all: Vec<&DataFile> = files.iter().filter_map(|(id, _)| assets.get(*id)).collect();
         let mut errors = self.name_ids(&all);
-        self.locations.clear();
+        // Where each was, for one kept as it was.
+        let mut was: HashMap<T::Id, AssetPath<'static>> = self
+            .locations
+            .drain()
+            .map(|(id, location)| (id, location.path))
+            .collect();
+        was.extend(self.kept.drain());
         // The first of each id, as kept; later ones are only reported.
         let mut first: HashMap<&T::Id, usize> = HashMap::default();
         let mut kept: Vec<usize> = Vec::with_capacity(located.len());
@@ -254,10 +269,13 @@ impl<T: Definition> Registry<T> {
             let read = if base(def) {
                 // Not there if its bases don't resolve: as it last was, if
                 // it was.
-                whole
-                    .remove(def.id())
-                    .map(Arc::new)
-                    .or_else(|| previous.get(def.id()).cloned())
+                whole.remove(def.id()).map(Arc::new).or_else(|| {
+                    let kept = previous.get(def.id()).cloned()?;
+                    if let Some(path) = was.remove(def.id()) {
+                        self.kept.insert(def.id().clone(), path);
+                    }
+                    Some(kept)
+                })
             } else {
                 file.shared::<T>(location.at)
             };
@@ -275,6 +293,7 @@ mod tests {
 
     use super::*;
     use crate::Inherit;
+    use crate::file::tests::{of_defs, of_defs_named};
 
     #[derive(crate::Definition, Debug, Clone, Deserialize)]
     #[definition(file = "things")]
@@ -327,7 +346,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(n, defs)| {
-                let id = assets.add(DataFile::of_defs(defs)).id();
+                let id = assets.add(of_defs(defs)).id();
                 (id, AssetPath::from(format!("{n}.ron")))
             })
             .collect();
@@ -407,7 +426,7 @@ mod tests {
                 let item = Item {
                     id: crate::Id::from_name(name),
                 };
-                let file = DataFile::of_defs_named(vec![item], named(name));
+                let file = of_defs_named(vec![item], named(name));
                 (assets.add(file).id(), AssetPath::from(format!("{n}.ron")))
             })
             .collect();
@@ -430,13 +449,8 @@ mod tests {
         ]]);
         // `pebble`'s base is gone: it's kept as it was, `near` inherited.
         let mut assets = Assets::<DataFile>::default();
-        let file = assets.add(DataFile::of_defs(vec![thing(
-            "pebble",
-            Some("rock"),
-            false,
-            Some(1),
-        )]));
-        let files = [(file.id(), AssetPath::from("0.ron"))];
+        let file = assets.add(of_defs(vec![thing("pebble", Some("rock"), false, Some(1))]));
+        let files = [(file.id(), AssetPath::from("moved.ron"))];
         registry.index(&files, &assets);
         let referenced = registry.referenced(&assets);
         let pebble = referenced
@@ -444,6 +458,8 @@ mod tests {
             .find(|from| from.id == "pebble")
             .expect("kept");
         assert_eq!(pebble.references.len(), 1, "its kept `near`");
+        assert!(pebble.kept);
+        assert_eq!(pebble.path, AssetPath::from("0.ron"), "where it was read");
         assert_eq!(pebble.references[0].field, "near");
         assert_eq!(registry.target(&"pebble".to_owned()), Target::Read);
         assert_eq!(registry.target(&"nothing".to_owned()), Target::Missing);

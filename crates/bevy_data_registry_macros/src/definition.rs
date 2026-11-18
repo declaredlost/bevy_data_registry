@@ -6,7 +6,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Error, Expr, Field, Fields, Ident, LitStr, Path, Result};
 
-use crate::references;
+use crate::references::{self, Walker};
 
 /// What the attributes say about the struct's fields.
 struct Marked<'a> {
@@ -93,9 +93,11 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
             let _: &#krate::Id<Self> = &self.#id_ident;
         }
     });
-    let (references, bounds) = references_fn(&krate, fields, id, marked.base, &input.generics)?;
-    let generics = references::bound(&input.generics, bounds);
-    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+    // Its `References` isn't what's written: a field holding the kind
+    // itself isn't one.
+    let walker = Walker::new(&krate, &input.generics, None);
+    let references = references_fn(&walker, fields, id, marked.base)?;
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
         impl #impl_generics #krate::Definition for #name #type_generics #where_clause {
@@ -124,14 +126,12 @@ const NAMED_ONLY: &str = "a definition is a struct with named fields";
 /// the id, the base (checked as families are made whole) and those marked
 /// `#[definition(unchecked)]`.
 fn references_fn<'a>(
-    krate: &TokenStream,
+    walker: &Walker,
     fields: impl IntoIterator<Item = &'a Field>,
     id: &Field,
     base: Option<&Field>,
-    generics: &syn::Generics,
-) -> Result<(TokenStream, Vec<syn::WherePredicate>)> {
+) -> Result<TokenStream> {
     let mut walks = Vec::new();
-    let mut bounds = Vec::new();
     for field in fields.into_iter().filter(|field| {
         !core::ptr::eq(*field, id) && !base.is_some_and(|base| core::ptr::eq(*field, base))
     }) {
@@ -143,20 +143,16 @@ fn references_fn<'a>(
         };
         let name = ident.to_string();
         let name = name.strip_prefix("r#").unwrap_or(&name);
-        let (walk, bound) =
-            references::walk(krate, name, &quote!(&def.#ident), &field.ty, generics);
-        walks.push(walk);
-        bounds.extend(bound);
+        walks.extend(walker.field(name, &quote!(&def.#ident), &field.ty));
     }
-    let walking = references::walking(krate);
-    let closure = quote! {
+    let walking = walker.walking();
+    Ok(quote! {
         |def, to| {
             let _ = (&def, &to);
             #walking
             #(#walks)*
         }
-    };
-    Ok((closure, bounds))
+    })
 }
 
 /// Whether `ty` is written as an `Id<..>`: checked to be the kind's own.

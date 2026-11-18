@@ -21,6 +21,9 @@ pub trait DataApp {
 impl DataApp for App {
     fn register_definition<T: Definition>(&mut self) -> &mut Self {
         let kinds = self.world_mut().get_resource_or_init::<Kinds>().clone();
+        if kinds.has::<T>() {
+            return self;
+        }
         let DefinitionInfo {
             name,
             resolvers,

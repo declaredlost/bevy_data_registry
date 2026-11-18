@@ -30,8 +30,10 @@ use crate::id::{Id, short_type_name};
 /// A field of a type that isn't one is skipped, without a word: a type of
 /// your own holding [`Id`]s needs the derive, or they go unchecked. So is
 /// a field marked `#[definition(unchecked)]`. A field whose type names one
-/// of the deriving type's parameters (`item: Id<T>`, `payload: T`) is
-/// walked, and the derived impl bound by it being `References`.
+/// of the deriving type's parameters only inside `Id<..>` (`Vec<Id<T>>`),
+/// or inside the type itself (`next: Option<Box<Node<T>>>`), is walked; one
+/// naming it elsewhere (`payload: T`) isn't, as it may not be `References`,
+/// and the rest of the type is walked all the same.
 ///
 /// An error names the field an [`Id`] is in by its path from the
 /// definition: `finds.tag`.
@@ -87,6 +89,15 @@ impl<T: 'static> References for Id<T> {
             kind_name: short_type_name::<T>(),
             hash: self.hash(),
         });
+    }
+}
+
+impl<T: References, E: References> References for Result<T, E> {
+    fn visit_references(&self, to: &mut Referenced) {
+        match self {
+            Ok(item) => item.visit_references(to),
+            Err(error) => error.visit_references(to),
+        }
     }
 }
 
@@ -245,6 +256,59 @@ mod tests {
     #[derive(crate::References)]
     struct Find {
         tag: Id<Item>,
+    }
+
+    /// A recursive generic type: walked, though its impl can't be bound by
+    /// itself.
+    #[derive(crate::References)]
+    struct Node<T: 'static> {
+        item: Id<T>,
+        next: Option<Box<Node<T>>>,
+    }
+
+    #[test]
+    fn a_recursive_generic_type_is_walked_to_its_end() {
+        let list = Node::<Item> {
+            item: Id::from_name("first"),
+            next: Some(Box::new(Node {
+                item: Id::from_name("second"),
+                next: None,
+            })),
+        };
+        let mut to = Referenced::default();
+        list.visit_references(&mut to);
+        let fields: Vec<String> = to
+            .into_found()
+            .into_iter()
+            .map(|found| found.field)
+            .collect();
+        assert_eq!(fields, ["item", "next.item"]);
+    }
+
+    /// A generic type with a field of a parameter's own type: that field
+    /// isn't walked, the rest are, whatever the parameter.
+    #[derive(crate::References)]
+    struct Loot<T> {
+        item: Id<Item>,
+        #[expect(dead_code, reason = "only walked past")]
+        payload: T,
+    }
+
+    #[test]
+    fn a_parameters_field_leaves_the_rest_walked() {
+        let loot = Loot {
+            item: Id::from_name("pelt"),
+            payload: Note(Id::from_name("unseen")),
+        };
+        let mut to = Referenced::default();
+        to.enter("loot");
+        // `Note` isn't `References`: `Loot<Note>` is, all the same.
+        loot.visit_references(&mut to);
+        to.leave();
+        let found = to.into_found();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].field, "loot.item");
+        assert_eq!(found[0].hash, Id::<Item>::from_name("pelt").hash());
     }
 
     #[test]

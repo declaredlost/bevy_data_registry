@@ -18,110 +18,126 @@ pub(crate) fn resolve<T: Definition>(
     name: &str,
     label: &dyn Fn(&T::Id) -> String,
 ) -> (HashMap<T::Id, T>, Vec<String>) {
-    let mut by_id: HashMap<&T::Id, &T> = HashMap::default();
-    for &def in defs {
-        by_id.entry(def.id()).or_insert(def);
-    }
-    let mut whole = HashMap::default();
-    let mut failed = HashMap::default();
-    let mut errors = Vec::new();
-    for &def in defs {
-        let first = by_id
-            .get(def.id())
-            .is_some_and(|first| core::ptr::eq(*first, def));
-        if first
-            && (families.base)(def).is_some()
-            && let Err(error) = make(def, families, &by_id, &mut whole, &mut failed, label)
-        {
-            errors.push(format!("{name} `{}`: {error}", label(def.id())));
-        }
-    }
-    (whole, errors)
+    let mut resolver = Resolver::new(families, label);
+    let errors = resolver.run(defs, name);
+    (resolver.whole, errors)
 }
 
-/// `def`, whole, into `whole`: its chain of bases walked up to one whole
-/// or building on nothing, then each made whole from the top down. Without
-/// recursion, so however long a chain is, it can't overflow the stack.
-/// What can't be made whole goes in `failed`, with why, so a chain is
-/// walked once however many build on it.
-fn make<'a, T: Definition>(
-    def: &'a T,
-    families: &Families<T>,
-    by_id: &HashMap<&T::Id, &'a T>,
-    whole: &mut HashMap<T::Id, T>,
-    failed: &mut HashMap<&'a T::Id, String>,
-    label: &dyn Fn(&T::Id) -> String,
-) -> Result<(), String> {
-    // Those to make whole, `def` first, each building on the next.
-    let mut chain: Vec<&'a T> = Vec::new();
-    let result = walk(def, families, by_id, whole, failed, &mut chain, label);
-    if let Err(error) = &result {
-        for def in chain {
-            failed.insert(def.id(), error.clone());
-        }
-        return result;
-    }
-    // Top down, so each base is whole before what builds on it: every base
-    // is there, as the walk found.
-    while let Some(def) = chain.pop() {
-        let Some(base_id) = (families.base)(def) else {
-            continue;
-        };
-        let base = whole.get(base_id).or_else(|| by_id.get(base_id).copied());
-        if let Some(base) = base {
-            let filled = (families.inherit)(def, base);
-            whole.insert(def.id().clone(), filled);
-        }
-    }
-    Ok(())
+/// Making a kind's definitions whole: what's known so far.
+struct Resolver<'a, T: Definition> {
+    families: &'a Families<T>,
+    /// Shows ids in messages.
+    label: &'a dyn Fn(&T::Id) -> String,
+    /// The first definition of each id.
+    by_id: HashMap<&'a T::Id, &'a T>,
+    /// Those made whole.
+    whole: HashMap<T::Id, T>,
+    /// Those that can't be, with why: a chain is walked once however many
+    /// build on it.
+    failed: HashMap<&'a T::Id, String>,
+    /// How many steps up a chain of bases the walks have taken.
+    steps: usize,
 }
 
-/// Walks up from `def` into `chain` while what it reaches builds on
-/// something and isn't whole yet.
-fn walk<'a, T: Definition>(
-    def: &'a T,
-    families: &Families<T>,
-    by_id: &HashMap<&T::Id, &'a T>,
-    whole: &HashMap<T::Id, T>,
-    failed: &HashMap<&'a T::Id, String>,
-    chain: &mut Vec<&'a T>,
-    label: &dyn Fn(&T::Id) -> String,
-) -> Result<(), String> {
-    let mut seen: HashSet<&T::Id> = HashSet::default();
-    let mut current = def;
-    while let Some(base_id) = (families.base)(current) {
-        #[cfg(test)]
-        tests::STEPS.with(|steps| steps.set(steps.get() + 1));
-        if whole.contains_key(current.id()) {
-            break;
+impl<'a, T: Definition> Resolver<'a, T> {
+    /// A resolver of definitions building on others as `families` says,
+    /// showing ids in messages by `label`.
+    fn new(families: &'a Families<T>, label: &'a dyn Fn(&T::Id) -> String) -> Self {
+        Self {
+            families,
+            label,
+            by_id: HashMap::default(),
+            whole: HashMap::default(),
+            failed: HashMap::default(),
+            steps: 0,
         }
-        if let Some(error) = failed.get(current.id()) {
-            return Err(error.clone());
-        }
-        if !seen.insert(current.id()) {
-            return Err("builds on itself, through its bases".to_owned());
-        }
-        chain.push(current);
-        current = by_id
-            .get(base_id)
-            .ok_or_else(|| format!("builds on `{}`, which isn't there", label(base_id)))?;
     }
-    Ok(())
+
+    /// Makes every definition of `defs` that builds on another whole, into
+    /// `whole`; returns what's wrong, the kind named `name`.
+    fn run(&mut self, defs: &[&'a T], name: &str) -> Vec<String> {
+        for &def in defs {
+            self.by_id.entry(def.id()).or_insert(def);
+        }
+        let mut errors = Vec::new();
+        for &def in defs {
+            let first = self
+                .by_id
+                .get(def.id())
+                .is_some_and(|first| core::ptr::eq(*first, def));
+            if first
+                && (self.families.base)(def).is_some()
+                && let Err(error) = self.make(def)
+            {
+                errors.push(format!("{name} `{}`: {error}", (self.label)(def.id())));
+            }
+        }
+        errors
+    }
+
+    /// `def`, whole, into `whole`: its chain of bases walked up to one
+    /// whole or building on nothing, then each made whole from the top
+    /// down. Without recursion, so however long a chain is, it can't
+    /// overflow the stack.
+    fn make(&mut self, def: &'a T) -> Result<(), String> {
+        // Those to make whole, `def` first, each building on the next.
+        let mut chain: Vec<&'a T> = Vec::new();
+        let result = self.walk(def, &mut chain);
+        if let Err(error) = &result {
+            for def in chain {
+                self.failed.insert(def.id(), error.clone());
+            }
+            return result;
+        }
+        // Top down, so each base is whole before what builds on it: every
+        // base is there, as the walk found.
+        while let Some(def) = chain.pop() {
+            let Some(base_id) = (self.families.base)(def) else {
+                continue;
+            };
+            let base = self
+                .whole
+                .get(base_id)
+                .or_else(|| self.by_id.get(base_id).copied());
+            if let Some(base) = base {
+                let filled = (self.families.inherit)(def, base);
+                self.whole.insert(def.id().clone(), filled);
+            }
+        }
+        Ok(())
+    }
+
+    /// Walks up from `def` into `chain` while what it reaches builds on
+    /// something and isn't whole yet.
+    fn walk(&mut self, def: &'a T, chain: &mut Vec<&'a T>) -> Result<(), String> {
+        let mut seen: HashSet<&T::Id> = HashSet::default();
+        let mut current = def;
+        while let Some(base_id) = (self.families.base)(current) {
+            self.steps += 1;
+            if self.whole.contains_key(current.id()) {
+                break;
+            }
+            if let Some(error) = self.failed.get(current.id()) {
+                return Err(error.clone());
+            }
+            if !seen.insert(current.id()) {
+                return Err("builds on itself, through its bases".to_owned());
+            }
+            chain.push(current);
+            current = self.by_id.get(base_id).ok_or_else(|| {
+                format!("builds on `{}`, which isn't there", (self.label)(base_id))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
-pub(super) mod tests {
-    use std::cell::Cell;
-
+mod tests {
     use serde::Deserialize;
 
     use super::*;
     use crate::Inherit;
-
-    thread_local! {
-        /// How many steps up a chain of bases `walk` has taken.
-        pub(super) static STEPS: Cell<usize> = const { Cell::new(0) };
-    }
 
     /// A definition with a value it takes from its base when it has none.
     #[derive(crate::Definition, Debug, Clone, PartialEq, Deserialize)]
@@ -205,14 +221,14 @@ pub(super) mod tests {
             .collect();
         things.reverse();
         let refs: Vec<&Thing> = things.iter().collect();
-        STEPS.with(|steps| steps.set(0));
-        let (whole, errors) = resolve(&refs, &families(), "Thing", &String::clone);
-        assert!(whole.is_empty());
+        let families = families();
+        let mut resolver = Resolver::new(&families, &String::clone);
+        let errors = resolver.run(&refs, "Thing");
+        assert!(resolver.whole.is_empty());
         assert_eq!(errors.len(), LONG, "each says why");
         assert!(errors.iter().all(|error| error.contains("`nobody`")));
         // Walked again from each, it'd take 200 million steps.
-        let steps = STEPS.with(Cell::get);
-        assert!(steps <= 2 * LONG, "{steps} steps");
+        assert!(resolver.steps <= 2 * LONG, "{} steps", resolver.steps);
     }
 
     #[test]

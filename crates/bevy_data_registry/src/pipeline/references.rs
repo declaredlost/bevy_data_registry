@@ -10,8 +10,9 @@ use crate::registry::Target;
 
 /// Pushes to [`DataErrors`] every [`Id`](crate::Id) in a definition, but
 /// its own and its base, that names no definition `get` finds: of what the
-/// registry gives (whole, or kept from before a reload), once every kind is
-/// indexed.
+/// registry gives (whole, or kept from before a reload) and of the families
+/// as written, once every kind is indexed. One naming a definition whose
+/// base doesn't resolve is skipped: that's reported already.
 pub(super) fn check(world: &mut World) {
     let kinds = world.resource::<Kinds>().clone();
     let kinds = kinds.read();
@@ -28,7 +29,8 @@ pub(super) fn check(world: &mut World) {
                 // By the name its kind read it as, or its file did.
                 let named = lookup
                     .as_ref()
-                    .and_then(|(_, found)| found.as_ref()?.1.clone());
+                    .and_then(|(_, found)| found.as_ref()?.1.as_deref())
+                    .map(crate::id::escaped);
                 let name = named.unwrap_or_else(|| {
                     assets.get(from.file).map_or_else(
                         || format!("#{:016x}", reference.hash),
@@ -52,9 +54,14 @@ pub(super) fn check(world: &mut World) {
                         reference.kind_name
                     ),
                 };
+                let source = if from.kept {
+                    format!("kept from {}", from.path)
+                } else {
+                    from.path.to_string()
+                };
                 errors.push(format!(
-                    "{} `{}` ({}): `{}` {problem}",
-                    kind.name, from.id, from.path, reference.field
+                    "{} `{}` ({source}): `{}` {problem}",
+                    kind.name, from.id, reference.field
                 ));
             }
         }

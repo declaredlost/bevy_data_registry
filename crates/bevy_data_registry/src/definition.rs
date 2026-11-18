@@ -51,7 +51,12 @@ pub trait Definition: DeserializeOwned + Send + Sync + 'static {
 ///
 /// ```rust,ignore
 /// DefinitionInfo::new("Item", vec![Box::new(FileName("items"))])
-///     .references(|item, to| item.makes.visit_references(to))
+///     .references(|item, to| {
+///         // Named in errors by the field it's in: `makes`.
+///         to.enter("makes");
+///         item.makes.visit_references(to);
+///         to.leave();
+///     })
 ///     .families(Families::new(|item| item.base.as_ref(), |item, base| ..))
 /// ```
 #[non_exhaustive]
