@@ -1,6 +1,6 @@
-// Things in their kind's folder: one whole, a family, one built on it.
+// Under `things/`, Thing's folder: one whole, a family, one built on it.
 [
     (id: "pebble", weight: 1),
-    (id: "rocks", abstract: true, weight: 5),
+    (id: "rocks", family: true, weight: 5),
     (id: "boulder", base: "rocks"),
 ]

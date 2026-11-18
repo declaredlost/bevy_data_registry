@@ -4,6 +4,7 @@
 resolver = "3"
 members = [
     "./crates/bevy_data_registry",
+    "./crates/bevy_data_registry_macros",
 ]
 
 [workspace.package]
@@ -42,12 +43,23 @@ type_complexity = "allow"
 
 # Game engine (headless by default)
 bevy = { version = "0.20", default-features = false, features = ["std"] }
-# Loading RON files as assets
-bevy_common_assets = { version = "0.18", default-features = false }
+# The derive macro, re-exported by the crate
+bevy_data_registry_macros = { path = "./crates/bevy_data_registry_macros", version = "0.1.0" }
+
+# Writing the derive macro
+proc-macro2 = { version = "1.0", default-features = false }
+quote = { version = "1.0", default-features = false }
+syn = { version = "2.0", default-features = false }
 
 # (De)serialization
 ron = { version = "0.12", features = [] }
 serde = { version = "1.0", features = ["derive"] }
+# Testing: a second data format, written outside the crate
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+# Deserializing a definition whose kind is only known at runtime
+erased-serde = { version = "0.4", default-features = false, features = ["std"] }
+# Error types
+thiserror = { version = "2.0", default-features = false }
 
 # Testing: the app, headless, stepped tick by tick
 bevy_harness = { git = "https://github.com/declaredlost/bevy_harness", branch = "main", version = "0.1.0" }

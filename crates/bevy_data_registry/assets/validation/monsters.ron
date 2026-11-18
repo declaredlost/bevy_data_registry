@@ -1,0 +1,5 @@
+// `ghost` drops `ectoplasm`, which isn't an item: validation catches it.
+[
+    (id: "skeleton", drops: ["bone"]),
+    (id: "ghost", drops: ["ectoplasm"]),
+]

@@ -2,29 +2,35 @@
 
 # bevy_data_registry
 
-**Data definitions for Bevy: RON files loaded by kind, indexed by id, validated and hot-reloaded.**
+**Data definitions for Bevy: files claimed by kind, indexed by id, validated and hot-reloaded.**
 
 [![Build](https://img.shields.io/github/actions/workflow/status/declaredlost/bevy_data_registry/build.yml?branch=main&label=build&style=flat-square)](https://github.com/declaredlost/bevy_data_registry/actions/workflows/build.yml)
 [![Security](https://img.shields.io/github/actions/workflow/status/declaredlost/bevy_data_registry/security.yml?branch=main&label=security&style=flat-square)](https://github.com/declaredlost/bevy_data_registry/actions/workflows/security.yml)
 
 </div>
 
+```ron
+// assets/data/enemies/spider/monsters.ron
+[
+    (id: "spider", tags: ["venomous"]),
+]
+```
+
 ```rust,ignore
-#[derive(Deserialize)]
+#[derive(Definition, Deserialize)]
+#[definition(file = "tags")]
 struct Tag { id: String }
 
-impl Definition for Tag {
-    const FOLDER: &'static str = "tags";
-    const NAME: &'static str = "tag";
-    type Id = String;
-    fn id(&self) -> &String { &self.id }
-}
+#[derive(Definition, Deserialize)]
+#[definition(file = "monsters", folder = "bestiary")]
+struct Monster { id: String, tags: Vec<String> }
 
-app.add_plugins(DataRegistryPlugin::new("data"))
-    .add_definitions::<Tag>();
+app.add_plugins(DataRegistryPlugin::default())
+    .register_definition::<Tag>()
+    .register_definition::<Monster>();
 
-fn burn(tags: Defs<Tag>) {
-    let fire = tags.get(&"fire".to_owned());
+fn spawn(monsters: Definitions<Monster>) {
+    let spider = monsters.get("spider");
 }
 ```
 
@@ -35,7 +41,8 @@ fn burn(tags: Defs<Tag>) {
 
 | Crate | Description |
 |---|---|
-| [`bevy_data_registry`](crates/bevy_data_registry) | RON definition files loaded by kind, indexed by id, validated and hot-reloaded |
+| [`bevy_data_registry`](crates/bevy_data_registry) | Definitions read from the files each kind claims, indexed by id, validated and hot-reloaded |
+| [`bevy_data_registry_macros`](crates/bevy_data_registry_macros) | `#[derive(Definition)]`, re-exported by `bevy_data_registry` |
 
 ## Requirements
 

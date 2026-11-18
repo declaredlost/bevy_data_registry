@@ -1,0 +1,2 @@
+// A file can hold a single definition.
+(id: "spider", health: 20, drops: ["silk", "venom_sac"])

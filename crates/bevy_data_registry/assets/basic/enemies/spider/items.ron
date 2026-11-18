@@ -1,0 +1,5 @@
+// The spider's area: a file per kind, each named for it.
+[
+    (id: "silk", price: 3),
+    (id: "venom_sac", price: 12),
+]

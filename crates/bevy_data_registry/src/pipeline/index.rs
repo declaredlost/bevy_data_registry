@@ -4,17 +4,18 @@
 use bevy::prelude::*;
 
 use super::DataErrors;
+use super::load::DataFiles;
 use crate::registry::Registry;
-use crate::{DataAsset, Definition};
+use crate::{DataFile, Definition};
 
-/// Indexes every loaded definition of kind `T` by id, from all its files,
-/// and makes those that build on a family whole: rejecting ids used twice
-/// and families that don't resolve.
+/// Indexes every definition of kind `T`, from every file, and makes those
+/// that build on a family whole: rejecting ids used twice and families
+/// that don't resolve.
 pub(super) fn index_kind<T: Definition>(
-    asset_server: Res<AssetServer>,
-    assets: Res<Assets<DataAsset<T>>>,
+    files: Res<DataFiles>,
+    assets: Res<Assets<DataFile>>,
     mut registry: ResMut<Registry<T>>,
     mut errors: ResMut<DataErrors>,
 ) {
-    errors.extend(registry.index(&asset_server, &assets));
+    errors.extend(registry.index(&files.0, &assets));
 }

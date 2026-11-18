@@ -1,0 +1,7 @@
+// Under `weapons/`, Weapon's folder. `blade` is a family: only built on,
+// never read. Each sword takes from it what it doesn't say itself.
+[
+    (id: "blade", family: true, damage: 10, speed: 1.0, price: 50),
+    (id: "short_sword", base: "blade", speed: 1.4),
+    (id: "long_sword", base: "blade", damage: 16, price: 90),
+]

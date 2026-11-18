@@ -1,0 +1,4 @@
+// A quarry's things and tags, a file per kind.
+[
+    (id: "slate", base: "rocks", tags: ["heavy", "smooth"]),
+]
