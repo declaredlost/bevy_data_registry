@@ -41,7 +41,9 @@ pub mod prelude {
 /// crate's docs.
 ///
 /// ```rust,ignore
+/// // The defaults: RON files under `assets/data/`.
 /// app.add_plugins(DataRegistryPlugin::default());
+/// // Or set the folder and the formats.
 /// app.add_plugins(DataRegistryPlugin {
 ///     path: "mods://data".into(),
 ///     formats: vec![Arc::new(Ron::default()), Arc::new(Json)],
@@ -52,8 +54,9 @@ pub struct DataRegistryPlugin {
     /// The folder holding the data files, read at any depth: `data`, under
     /// `assets/`, by default. Loaded with Bevy's `load_folder`, so:
     ///
-    /// - every file in it must be one some loader reads: Bevy fails the whole
-    ///   folder over one that none does;
+    /// - a file no loader reads is skipped (with a warning if another loader
+    ///   reads it), but a file of the app's formats that no kind claims fails
+    ///   the folder;
     /// - on first load, a file that fails to load fails the folder before the
     ///   files after it are tried, so broken files are reported one at a time;
     /// - with `dev`, a folder in it deleted or moved out while the app runs
@@ -62,7 +65,8 @@ pub struct DataRegistryPlugin {
     /// - a folder in it linking back to one it's in makes loading never end.
     pub path: AssetPath<'static>,
     /// The formats data files are written in, each chosen by a file's
-    /// extension: [`Ron`] by default.
+    /// extension: [`Ron`] by default. At least one, each with an extension:
+    /// the plugin panics otherwise.
     pub formats: Vec<Arc<dyn DataFormat>>,
 }
 
@@ -81,6 +85,12 @@ impl Plugin for DataRegistryPlugin {
             !self.formats.is_empty(),
             "DataRegistryPlugin needs at least one format"
         );
+        assert!(
+            self.formats
+                .iter()
+                .all(|format| !format.extensions().is_empty()),
+            "a format in DataRegistryPlugin::formats has no extensions: none of its files would load"
+        );
         let kinds = app.world_mut().get_resource_or_init::<Kinds>().clone();
         let extensions = self
             .formats
@@ -95,5 +105,25 @@ impl Plugin for DataRegistryPlugin {
                 extensions,
             });
         pipeline::build(app, self.path.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "has no extensions")]
+    fn a_format_needs_an_extension() {
+        App::new().add_plugins(DataRegistryPlugin {
+            formats: vec![
+                Arc::new(Ron::default()),
+                Arc::new(Ron {
+                    extensions: Vec::new(),
+                    ..Ron::default()
+                }),
+            ],
+            ..default()
+        });
     }
 }

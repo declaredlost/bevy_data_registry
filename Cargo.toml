@@ -56,6 +56,8 @@ ron = { version = "0.12", features = [] }
 serde = { version = "1.0", features = ["derive"] }
 # Testing: a second data format, written outside the crate
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
+# Testing: a folder of its own for each hot reload test
+tempfile = "3.27"
 # Deserializing a definition whose kind is only known at runtime
 erased-serde = { version = "0.4", default-features = false, features = ["std"] }
 # Error types

@@ -38,7 +38,8 @@ pub trait Definition: DeserializeOwned + Send + Sync + 'static {
     /// `#[definition(file = "..")]`, `folder`, `extension` and `resolve`.
     fn resolvers() -> Vec<Box<dyn Resolve>>;
 
-    /// What it builds on, if anything: a family of its kind.
+    /// What it builds on, if anything: another definition of its kind,
+    /// often a family, though any can be built on.
     fn base(&self) -> Option<&Self::Id> {
         None
     }

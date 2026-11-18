@@ -198,7 +198,8 @@ fn check(key: &str, value: &LitStr) -> Result<()> {
             && !text.contains('\\')
             && text
                 .split('/')
-                .all(|part| !part.is_empty() && part != "." && part != "..")
+                // `:` would make `C:` a drive on Windows: never in the data folder.
+                .all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains(':'))
     } else {
         !text.is_empty() && !text.contains(['/', '\\', '.'])
     };
@@ -298,6 +299,7 @@ mod tests {
             (quote!(folder = "/skills"), "from the data folder's top"),
             (quote!(folder = "skills/../x"), "from the data folder's top"),
             (quote!(folder = "skills/"), "from the data folder's top"),
+            (quote!(folder = "C:/mods"), "from the data folder's top"),
         ] {
             let input: DeriveInput = parse_quote! {
                 #[definition(#rule)]
@@ -306,6 +308,17 @@ mod tests {
             let error = error(&input);
             assert!(error.contains(says), "{rule}: {error}");
         }
+    }
+
+    #[test]
+    fn a_resolver_can_be_any_expression() {
+        let item = expand(&parse_quote! {
+            #[definition(resolve = { let name = "loot"; TopLevel(name) })]
+            struct Item { id: String }
+        })
+        .unwrap()
+        .to_string();
+        assert!(item.contains("let name"), "{item}");
     }
 
     #[test]

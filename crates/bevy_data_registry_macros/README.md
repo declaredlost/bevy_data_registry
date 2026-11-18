@@ -1,6 +1,6 @@
 # bevy_data_registry_macros
 
-The derive macro of [`bevy_data_registry`](../bevy_data_registry): use it
+The derive macro of [`bevy_data_registry`](https://docs.rs/bevy_data_registry): use it
 through that crate, which re-exports it, rather than depending on this one.
 
 ## `#[derive(Definition)]`

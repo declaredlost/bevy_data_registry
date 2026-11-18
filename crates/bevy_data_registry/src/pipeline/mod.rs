@@ -130,6 +130,7 @@ pub(crate) fn build(app: &mut App, path: AssetPath<'static>) {
                 .chain(),
         )
         .add_systems(Startup, load::load)
+        .add_systems(OnEnter(DataState::Failed), finish::exit)
         .add_systems(
             Update,
             (

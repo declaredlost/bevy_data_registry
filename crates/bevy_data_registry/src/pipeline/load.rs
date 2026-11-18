@@ -2,23 +2,50 @@
 //! loaded, or failed to. On first load, and once loaded, after a file
 //! changed, was added or removed.
 
+use std::path::Path;
+
 use bevy::asset::io::AssetReaderError;
 use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath, LoadState, LoadedFolder};
 use bevy::prelude::*;
 
 use super::{DataErrors, DataState};
-use crate::file::DataFile;
+use crate::file::{DataFile, in_data};
 
 /// The data folder, loaded with every file in it.
 #[derive(Resource)]
 pub(crate) struct DataFolder {
     pub path: AssetPath<'static>,
     handle: Option<Handle<LoadedFolder>>,
+    /// Files that failed to load as they were added, once loaded: held, so
+    /// Bevy reloads each when it's saved again. The folder's reload failed
+    /// with them, and is asked for again once one loads.
+    broken: Vec<(AssetPath<'static>, Handle<DataFile>)>,
+    /// Whether it's been listed again on first load, as a file went
+    /// missing: only once, so one that always is fails loading.
+    relisted: bool,
 }
 
 impl DataFolder {
     pub fn new(path: AssetPath<'static>) -> Self {
-        Self { path, handle: None }
+        Self {
+            path,
+            handle: None,
+            broken: Vec::new(),
+            relisted: false,
+        }
+    }
+
+    /// Whether `path` is in the folder, at any depth: as the loader sees it.
+    fn holds(&self, path: &AssetPath) -> bool {
+        in_data(&self.path, path).is_some()
+    }
+
+    /// Whether `missing`, as the asset reader names it, is the folder
+    /// itself rather than a file in it. The folder at the source's root has
+    /// no name to tell it by: what's missing is then taken for a file.
+    fn is_itself(&self, missing: &Path) -> bool {
+        let own = self.path.path();
+        !own.as_os_str().is_empty() && missing.ends_with(own)
     }
 }
 
@@ -36,8 +63,23 @@ pub(crate) struct Progress {
     pub due: bool,
 }
 
-/// Starts loading the data folder.
-pub(super) fn load(asset_server: Res<AssetServer>, mut folder: ResMut<DataFolder>) {
+/// Starts loading the data folder; fails loading if its asset source isn't
+/// registered, as Bevy only logs that, leaving the folder loading forever.
+pub(super) fn load(
+    asset_server: Res<AssetServer>,
+    mut folder: ResMut<DataFolder>,
+    mut progress: ResMut<Progress>,
+    mut errors: ResMut<DataErrors>,
+) {
+    let source = folder.path.source();
+    if asset_server.get_source(source).is_err() {
+        errors.push(format!(
+            "data folder {}: asset source {source} isn't registered",
+            folder.path
+        ));
+        progress.due = true;
+        return;
+    }
     folder.handle = Some(asset_server.load_folder(folder.path.clone()));
 }
 
@@ -47,18 +89,20 @@ pub(super) fn load(asset_server: Res<AssetServer>, mut folder: ResMut<DataFolder
 pub(super) fn settle(
     state: Res<State<DataState>>,
     asset_server: Res<AssetServer>,
-    folder: Res<DataFolder>,
+    mut folder: ResMut<DataFolder>,
     folders: Res<Assets<LoadedFolder>>,
     mut file_events: MessageReader<AssetEvent<DataFile>>,
     mut folder_events: MessageReader<AssetEvent<LoadedFolder>>,
     mut failures: MessageReader<AssetLoadFailedEvent<DataFile>>,
+    mut folder_failures: MessageReader<AssetLoadFailedEvent<LoadedFolder>>,
     mut progress: ResMut<Progress>,
     mut files: ResMut<DataFiles>,
     mut errors: ResMut<DataErrors>,
 ) {
-    let Some(handle) = &folder.handle else {
+    let Some(handle) = folder.handle.clone() else {
         return;
     };
+    let loaded = *state.get() == DataState::Loaded;
     // Read every frame, so what loading itself sent isn't taken for a
     // change once loaded. Only the data files count: the loader reads any
     // file of its extensions the app loads, wherever it is. `Added` is
@@ -66,15 +110,55 @@ pub(super) fn settle(
     // once loading is over; a file added later shows as the folder
     // modified.
     let ours = |id: AssetId<DataFile>| files.0.iter().any(|(file, _)| *file == id);
-    let files_changed = file_events.read().any(|event| match event {
-        AssetEvent::Modified { id } | AssetEvent::Removed { id } => ours(*id),
-        _ => false,
-    });
+    let broken = |folder: &DataFolder, id: AssetId<DataFile>| {
+        folder.broken.iter().any(|(_, file)| file.id() == id)
+    };
+    let mut files_changed = false;
+    let mut fixed = false;
+    for event in file_events.read() {
+        match *event {
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } if ours(id) => {
+                files_changed = true;
+            }
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id }
+                if broken(&folder, id) =>
+            {
+                fixed = true;
+            }
+            _ => {}
+        }
+    }
+    let mut failed = false;
+    for failure in failures.read() {
+        if ours(failure.id) {
+            failed = true;
+        } else if loaded
+            && folder.holds(&failure.path)
+            && !folder.broken.iter().any(|(path, _)| *path == failure.path)
+        {
+            // Added, and failing the folder's reload with it.
+            let file = asset_server.load(failure.path.clone());
+            folder.broken.push((failure.path.clone(), file));
+        }
+    }
+    // Every message read, not up to the first that counts: one left unread
+    // would be taken for another change next frame.
     let folder_changed = folder_events
         .read()
-        .any(|event| event.is_modified(handle.id()));
-    let failed = failures.read().any(|failure| ours(failure.id));
-    let changed = files_changed || folder_changed || failed;
+        .fold(false, |any, event| any | event.is_modified(handle.id()));
+    let folder_failed = folder_failures
+        .read()
+        .fold(false, |any, failure| any | (failure.id == handle.id()));
+    if folder_changed {
+        folder.broken.clear();
+    } else if fixed {
+        // The folder's reload failed: asking for it again reloads it.
+        folder.broken.clear();
+        folder.handle = Some(asset_server.load_folder(folder.path.clone()));
+    }
+    let changed = files_changed || folder_changed || failed || folder_failed;
 
     match state.get() {
         DataState::Loading if !progress.due => {}
@@ -87,24 +171,38 @@ pub(super) fn settle(
         _ => return,
     }
 
-    match asset_server.load_state(handle) {
+    match asset_server.load_state(&handle) {
         LoadState::NotLoaded | LoadState::Loading => return,
+        // Its last listing still holds every file it had: keep them.
+        LoadState::Failed(error) if loaded => errors.push(format!(
+            "failed to reload data folder {}, kept as it was: {error}",
+            folder.path
+        )),
         LoadState::Failed(error) => {
-            files.0.clear();
-            if is_not_found(&error) {
-                warn!("data folder {} not found", folder.path);
-            } else {
-                errors.push(format!(
+            match missing(&error) {
+                Some(path) if folder.is_itself(path) => {
+                    warn!("data folder {} not found", folder.path);
+                }
+                // A file deleted between Bevy listing the folder and
+                // loading it: listing it again leaves the file out. Once:
+                // one listed but never there (a broken link) is an error.
+                Some(_) if !folder.relisted => {
+                    folder.relisted = true;
+                    folder.handle = Some(asset_server.load_folder(folder.path.clone()));
+                    return;
+                }
+                _ => errors.push(format!(
                     "failed to load data folder {}: {error}",
                     folder.path
-                ));
+                )),
             }
+            files.0.clear();
         }
         LoadState::Loaded => {
-            let Some(loaded) = folders.get(handle) else {
+            let Some(listing) = folders.get(&handle) else {
                 return;
             };
-            let Some(settled) = list(&asset_server, loaded, &mut errors) else {
+            let Some(settled) = list(&asset_server, listing, &mut errors) else {
                 return;
             };
             files.0 = settled;
@@ -155,8 +253,14 @@ fn list(
 
 /// Whether a load failed because the file or folder isn't there.
 fn is_not_found(error: &AssetLoadError) -> bool {
-    matches!(
-        error,
-        AssetLoadError::AssetReaderError(AssetReaderError::NotFound(_))
-    )
+    missing(error).is_some()
+}
+
+/// What a load found missing, as the asset reader names it: for files, the
+/// full path.
+fn missing(error: &AssetLoadError) -> Option<&Path> {
+    match error {
+        AssetLoadError::AssetReaderError(AssetReaderError::NotFound(path)) => Some(path),
+        _ => None,
+    }
 }

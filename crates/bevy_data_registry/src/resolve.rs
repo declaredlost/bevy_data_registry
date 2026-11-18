@@ -13,8 +13,7 @@ use std::path::Path;
 ///
 /// A kind's files are those any of its rules claims. Every data file must
 /// be claimed by exactly one kind: one no kind claims, or two kinds do, is
-/// an error, never settled by precedence. Two kinds with the same rule (as
-/// displayed) panic when the second is registered.
+/// an error as the file loads, never settled by precedence.
 ///
 /// Displayed in those errors, it says what it claims: "files named
 /// `items`".
@@ -85,7 +84,9 @@ impl fmt::Display for Folder {
 ///
 /// In any folder: `Extension("items")` claims
 /// `swords.items.ron` and `spider/loot.items.json`, not `items.ron`
-/// (a [`FileName`]).
+/// (a [`FileName`]). The part before the last is looked at: with a format
+/// whose extension has a dot in it (`data.ron`), name files by
+/// [`FileName`] or [`Folder`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Extension(pub &'static str);
 
@@ -148,6 +149,10 @@ mod tests {
         assert!(claims(&items, "swords.items.ron"));
         assert!(claims(&items, "enemies/spider/loot.items.json"));
         assert!(claims(&items, "a.b.items.ron"));
+        assert!(
+            !claims(&items, "loot.items.tags.ron"),
+            "a `tags` file, not an `items` one"
+        );
         assert!(!claims(&items, "items.ron"), "that's a file name");
         assert!(!claims(&items, "swords.items"), "no format");
     }

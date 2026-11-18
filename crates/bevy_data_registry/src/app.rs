@@ -14,7 +14,7 @@ pub trait DataApp {
     ///
     /// # Panics
     ///
-    /// If `T` claims no files, or claims them by a rule another kind has.
+    /// If `T` claims no files.
     fn register_definition<T: Definition>(&mut self) -> &mut Self;
 }
 

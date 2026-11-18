@@ -2,7 +2,7 @@
 
 [package]
 name = "bevy_data_registry"
-description = "Data definitions for Bevy: tagged RON values, indexed by id, validated and hot-reloaded"
+description = "Data definitions for Bevy: files claimed per kind by name, folder or extension, indexed by id, validated and hot-reloaded"
 keywords = ["bevy", "data", "definitions", "ron", "assets"]
 
 version = { workspace = true }
@@ -32,6 +32,7 @@ thiserror = { workspace = true }
 [dev-dependencies]
 bevy_harness = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [[example]]
 name = "hot_reload"

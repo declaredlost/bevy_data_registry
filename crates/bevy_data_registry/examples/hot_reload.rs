@@ -7,6 +7,9 @@
 //! cargo run --example hot_reload --features dev
 //! ```
 
+use std::time::Duration;
+
+use bevy::app::ScheduleRunnerPlugin;
 use bevy::prelude::*;
 use bevy_data_registry::prelude::*;
 use serde::Deserialize;
@@ -21,7 +24,8 @@ struct Item {
 fn main() -> AppExit {
     App::new()
         .add_plugins((
-            DefaultPlugins,
+            // Headless: a frame every 16ms, not as fast as it can.
+            DefaultPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(16))),
             DataRegistryPlugin {
                 path: "hot_reload".into(),
                 ..default()

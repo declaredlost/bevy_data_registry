@@ -2,11 +2,11 @@
 //!
 //! [`DataFormat`] is a format; [`Ron`] the one that comes with the crate.
 //! A format reads a file with a [`FileSeed`] into [`FileContents`], which
-//! becomes a [`DataFile`] asset.
+//! becomes a [`DataFile`] asset, or fails with a [`DataFileError`].
 
 use bevy::prelude::*;
 
-pub use crate::file::{DataFile, FileContents, FileSeed};
+pub use crate::file::{DataFile, DataFileError, FileContents, FileSeed};
 
 /// A format data files are written in, chosen by their extension.
 ///
@@ -14,7 +14,9 @@ pub use crate::file::{DataFile, FileContents, FileSeed};
 ///
 /// A format only builds its deserializer over a file's bytes and runs the
 /// [`FileSeed`] it's given on it: which kind the file holds, and whether
-/// it holds one or a list, the seed works out. Any serde format fits:
+/// it holds one or a list, the seed works out. Any serde format fits whose
+/// deserializer supports `deserialize_any` (JSON, TOML, YAML; not Postcard
+/// or Bincode), as the seed asks it what the file holds:
 ///
 /// ```rust,ignore
 /// struct Json;
@@ -25,7 +27,10 @@ pub use crate::file::{DataFile, FileContents, FileSeed};
 ///     }
 ///
 ///     fn read(&self, bytes: &[u8], seed: FileSeed<'_>) -> Result<FileContents, BevyError> {
-///         Ok(seed.deserialize(&mut serde_json::Deserializer::from_slice(bytes))?)
+///         let mut json = serde_json::Deserializer::from_slice(bytes);
+///         let contents = seed.deserialize(&mut json)?;
+///         json.end()?; // nothing after it
+///         Ok(contents)
 ///     }
 /// }
 /// ```

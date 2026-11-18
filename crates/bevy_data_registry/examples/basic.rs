@@ -48,11 +48,11 @@ fn show(monsters: Definitions<Creature>, items: Definitions<Item>) {
     ids.sort();
     for id in ids {
         let monster = &monsters.get(id).expect("listed");
-        let worth: u32 = monster
+        let worth: u64 = monster
             .drops
             .iter()
             .filter_map(|drop| items.get(drop))
-            .map(|item| item.price)
+            .map(|item| u64::from(item.price))
             .sum();
         info!(
             "{id}: {} health, drops {:?} worth {worth} (from {})",

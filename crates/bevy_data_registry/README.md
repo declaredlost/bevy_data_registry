@@ -14,8 +14,9 @@ assets/data/
 ```ron
 // assets/data/enemies/spider/items.ron
 [
-    (id: "silk", price: 3),
-    (id: "venom_sac", base: "reagent"),
+    (id: "reagent", family: true, price: Some(5)),
+    (id: "silk", price: Some(3)),
+    (id: "venom_sac", base: Some("reagent")),
 ]
 ```
 
@@ -31,7 +32,7 @@ at any depth, is read.
   `resolve::Resolve`). `app.register_definition::<T>()` adds it.
 - **Claims**: every data file is exactly one kind's. A file no kind
   claims, or two kinds do, is an error naming the rules; never settled by
-  precedence. Two kinds with the same rule panic as they're registered.
+  precedence.
 - **Loading**: the data folder is loaded on startup, then every kind is
   indexed by id; ids used twice are errors. `DataState` moves to `Loaded`
   once it is, or to `Failed`, every error logged and the app told to exit.
@@ -105,8 +106,9 @@ picked by a file's extension.
 The data folder is loaded with Bevy's `load_folder`, and shares its
 limits:
 
-- Every file in it must be one some loader reads: Bevy fails the folder
-  over one none does.
+- A file no loader reads is skipped (with a warning if another loader
+  reads it), but a file of the app's formats that no kind claims fails the
+  folder.
 - On first load, a file that fails to load fails the folder, before the
   files after it are tried: broken files are reported one at a time.
 - With `dev`, a folder deleted or moved out while the app runs isn't
@@ -118,7 +120,9 @@ limits:
 
 A format is a `format::DataFormat`: its extensions, and reading a file's bytes
 with the `FileSeed` it's given, which knows the kind and whether the file
-holds one or a list. Any serde format fits in a few lines:
+holds one or a list. Any serde format whose deserializer supports
+`deserialize_any` (JSON, TOML, YAML; not Postcard or Bincode) fits in a
+few lines:
 
 ```rust,ignore
 use bevy_data_registry::format::{DataFormat, FileContents, FileSeed, Ron};
@@ -131,7 +135,10 @@ impl DataFormat for Json {
     }
 
     fn read(&self, bytes: &[u8], seed: FileSeed<'_>) -> Result<FileContents, BevyError> {
-        Ok(seed.deserialize(&mut serde_json::Deserializer::from_slice(bytes))?)
+        let mut json = serde_json::Deserializer::from_slice(bytes);
+        let contents = seed.deserialize(&mut json)?;
+        json.end()?; // nothing after it
+        Ok(contents)
     }
 }
 
@@ -166,12 +173,13 @@ cargo run --example hot_reload --features dev
 - `resolve` (public): `Resolve`, which files are a kind's; `FileName`,
   `Folder` and `Extension`.
 - `format` (public): `DataFormat`, what files are written in; `Ron`;
-  `FileSeed`, `FileContents` and `DataFile`, re-exported from `file`.
+  `FileSeed`, `FileContents`, `DataFile` and `DataFileError`, re-exported
+  from `file`.
 - `app`: `DataApp`, adding kinds to an app.
 - `file`: `DataFile`, a file's definitions; the kinds and the files each
   claims; the loader, reading a file as its kind in its format.
-- `registry`: `Registry`, where each definition is by id, its families
-  made whole; `Definitions`, reading them.
+- `registry`: `Registry`, each definition by id as last indexed, its
+  families made whole; `Definitions`, reading them.
 - `pipeline`: `DataState`, `DataSystems`, `DataErrors`, and the steps of
   each frame: `load` (the folder, until every file is settled), `index`,
   `finish` (the first load's end, and each reload's).

@@ -4,7 +4,7 @@
 
 use core::any::{Any, TypeId};
 use core::fmt;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use bevy::asset::io::Reader;
@@ -28,10 +28,11 @@ pub struct DataFile {
     entries: Vec<Entry>,
 }
 
-/// One definition of a file, its kind erased.
+/// One definition of a file, its kind erased: shared with the registry,
+/// which keeps what it indexed when the file is loaded again.
 struct Entry {
     kind: TypeId,
-    value: Box<dyn Any + Send + Sync>,
+    value: Arc<dyn Any + Send + Sync>,
 }
 
 impl DataFile {
@@ -64,15 +65,21 @@ impl DataFile {
             .into_iter()
             .map(|def| Entry {
                 kind: TypeId::of::<T>(),
-                value: Box::new(def),
+                value: Arc::new(def),
             })
             .collect();
         Self { entries }
     }
 
     /// Its definition at `at`, if it's of kind `T`.
+    #[cfg(test)]
     pub(crate) fn get<T: Definition>(&self, at: usize) -> Option<&T> {
         self.entries.get(at)?.value.downcast_ref()
+    }
+
+    /// Its definition at `at`, shared, if it's of kind `T`.
+    pub(crate) fn shared<T: Definition>(&self, at: usize) -> Option<Arc<T>> {
+        self.entries.get(at)?.value.clone().downcast().ok()
     }
 }
 
@@ -117,7 +124,7 @@ impl Kinds {
     ///
     /// # Panics
     ///
-    /// If `T` claims no files, or has a rule another kind has.
+    /// If `T` claims no files.
     pub fn add<T: Definition>(&self) -> bool {
         let mut kinds = self.0.write().unwrap_or_else(PoisonError::into_inner);
         if kinds.iter().any(|kind| kind.id == TypeId::of::<T>()) {
@@ -129,20 +136,6 @@ impl Kinds {
             "{} claims no data files: say which with #[definition(file = \"..\")], `folder`, `extension` or `resolve`",
             T::NAME,
         );
-        for rule in &resolvers {
-            let rule = rule.to_string();
-            if let Some(other) = kinds.iter().find(|kind| {
-                kind.resolvers
-                    .iter()
-                    .any(|theirs| theirs.to_string() == rule)
-            }) {
-                panic!(
-                    "{} and {} both claim {rule}: give one other files",
-                    other.name,
-                    T::NAME
-                );
-            }
-        }
         kinds.push(Kind {
             id: TypeId::of::<T>(),
             name: T::NAME,
@@ -211,7 +204,7 @@ impl<'de> DeserializeSeed<'de> for OneSeed<'_> {
         let value = (self.0.deserialize)(&mut deserializer).map_err(de::Error::custom)?;
         Ok(Entry {
             kind: self.0.id,
-            value,
+            value: Arc::from(value),
         })
     }
 }
@@ -262,19 +255,46 @@ impl AssetLoader for DataLoader {
     ) -> Result<DataFile, DataFileError> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let path = load_context.path();
-        let relative = (path.source() == self.root.source())
-            .then(|| path.path().strip_prefix(self.root.path()).ok())
-            .flatten()
-            .ok_or(DataFileError::Outside)?;
-        let format = self.format_of(relative);
+        let relative = in_data(&self.root, load_context.path()).ok_or(DataFileError::Outside)?;
+        let format = self.format_of(&relative);
         let kinds = self.kinds.0.read().unwrap_or_else(PoisonError::into_inner);
-        parse(format, relative, &bytes, &kinds)
+        parse(format, &relative, &bytes, &kinds)
     }
 
     fn extensions(&self) -> &[&str] {
         &self.extensions
     }
+}
+
+/// `path` from the data folder at `root`, without a query after its
+/// extension (`tags.json?rev=2`), as Bevy picks loaders; `None` if it's not
+/// in it: another source, another folder, or a way out of it
+/// (`data/../items.ron`).
+pub(crate) fn in_data(root: &AssetPath, path: &AssetPath) -> Option<PathBuf> {
+    if path.source() != root.source() {
+        return None;
+    }
+    let relative = path.path().strip_prefix(root.path()).ok()?;
+    if !relative
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    let mut relative = relative.to_path_buf();
+    // As Bevy's `AssetPath::get_full_extension`: a `?` after the first dot.
+    let query = relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| {
+            let dot = name.find('.')?;
+            let query = name[dot..].find('?')?;
+            Some(name[..dot + query].to_owned())
+        });
+    if let Some(name) = query {
+        relative.set_file_name(name);
+    }
+    Some(relative)
 }
 
 impl DataLoader {
@@ -442,14 +462,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Tag and Other both claim files named `tags`")]
-    fn two_kinds_cant_share_a_rule() {
+    fn two_kinds_with_one_rule_fail_on_its_files() {
         #[derive(crate::Definition, Deserialize)]
         #[definition(folder = "others", file = "tags")]
         struct Other {
             id: u32,
         }
-        kinds().add::<Other>();
+        let kinds = kinds();
+        assert!(kinds.add::<Other>(), "registering it doesn't panic");
+        let kinds = kinds.0.read().unwrap();
+        let error =
+            super::parse(&Ron::default(), Path::new("tags.ron"), b"[]", &kinds).unwrap_err();
+        assert!(
+            matches!(&error, DataFileError::Claimed("Tag", _, "Other", _)),
+            "{error}"
+        );
     }
 
     #[test]
@@ -474,5 +501,32 @@ mod tests {
         assert_eq!(extensions("items.ron"), ["ron"]);
         assert_eq!(extensions("items.data.ron"), ["data.ron"]);
         assert_eq!(extensions("items.json"), ["ron"], "the first otherwise");
+    }
+
+    #[test]
+    fn only_paths_in_the_data_folder_are_data() {
+        let root = AssetPath::from("data");
+        let in_data = |path: &str| {
+            super::in_data(&root, &AssetPath::parse(path)).map(|path| path.display().to_string())
+        };
+        assert_eq!(in_data("data/items.ron").as_deref(), Some("items.ron"));
+        assert_eq!(
+            in_data("data/spider/tags.json?rev=2").as_deref(),
+            Some("spider/tags.json"),
+            "without the query"
+        );
+        assert_eq!(
+            in_data("data/what?.items.ron").as_deref(),
+            Some("what?.items.ron"),
+            "a `?` before the extension is the name's"
+        );
+        assert_eq!(in_data("items.ron"), None);
+        assert_eq!(in_data("data/../items.ron"), None, "a way out");
+        assert_eq!(
+            in_data("data/./items.ron").as_deref(),
+            Some("items.ron"),
+            "the same file"
+        );
+        assert_eq!(in_data("mods://data/items.ron"), None, "another source");
     }
 }

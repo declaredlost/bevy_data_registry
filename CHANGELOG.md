@@ -29,8 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each kind declaring its own: a file no kind claims, or two kinds do, is
   an error rather than settled by precedence (was `kind_of`: the first
   kind folder on the path, else the file's name). The data folder is
-  loaded with Bevy's `load_folder`, which also hot-reloads files added and
-  removed.
+  loaded with Bevy's `load_folder`, which, with the `dev` feature (Bevy's
+  file watcher), also hot-reloads files added and removed.
 - Bevy-style API: `DataRegistryPlugin` configured by its fields (`path`,
   `formats`; `..default()`), `app.register_definition::<T>()` for every
   kind, `Definitions<T>` (was `Defs<T>`) looked up by borrowed ids, a
