@@ -2,6 +2,8 @@
 //! it doesn't say from it. Resolved once every file is indexed (and again
 //! on each reload), so what's read is whole.
 
+use std::sync::Arc;
+
 use bevy::platform::collections::{HashMap, HashSet};
 
 use crate::{Definition, Families};
@@ -33,8 +35,8 @@ struct Resolver<'a, T: Definition> {
     /// Those made whole.
     whole: HashMap<T::Id, T>,
     /// Those that can't be, with why: a chain is walked once however many
-    /// build on it.
-    failed: HashMap<&'a T::Id, String>,
+    /// build on it, and why is shared by every definition in it.
+    failed: HashMap<&'a T::Id, Arc<str>>,
     /// How many steps up a chain of bases the walks have taken.
     steps: usize,
 }
@@ -79,13 +81,13 @@ impl<'a, T: Definition> Resolver<'a, T> {
     /// whole or building on nothing, then each made whole from the top
     /// down. Without recursion, so however long a chain is, it can't
     /// overflow the stack.
-    fn make(&mut self, def: &'a T) -> Result<(), String> {
+    fn make(&mut self, def: &'a T) -> Result<(), Arc<str>> {
         // Those to make whole, `def` first, each building on the next.
         let mut chain: Vec<&'a T> = Vec::new();
         let result = self.walk(def, &mut chain);
         if let Err(error) = &result {
             for def in chain {
-                self.failed.insert(def.id(), error.clone());
+                self.failed.insert(def.id(), Arc::clone(error));
             }
             return result;
         }
@@ -109,7 +111,7 @@ impl<'a, T: Definition> Resolver<'a, T> {
 
     /// Walks up from `def` into `chain` while what it reaches builds on
     /// something and isn't whole yet.
-    fn walk(&mut self, def: &'a T, chain: &mut Vec<&'a T>) -> Result<(), String> {
+    fn walk(&mut self, def: &'a T, chain: &mut Vec<&'a T>) -> Result<(), Arc<str>> {
         let mut seen: HashSet<&T::Id> = HashSet::default();
         let mut current = def;
         while let Some(base_id) = (self.families.base)(current) {
@@ -118,14 +120,14 @@ impl<'a, T: Definition> Resolver<'a, T> {
                 break;
             }
             if let Some(error) = self.failed.get(current.id()) {
-                return Err(error.clone());
+                return Err(Arc::clone(error));
             }
             if !seen.insert(current.id()) {
-                return Err("builds on itself, through its bases".to_owned());
+                return Err("builds on itself, through its bases".into());
             }
             chain.push(current);
-            current = self.by_id.get(base_id).ok_or_else(|| {
-                format!("builds on `{}`, which isn't there", (self.label)(base_id))
+            current = self.by_id.get(base_id).ok_or_else(|| -> Arc<str> {
+                format!("builds on `{}`, which isn't there", (self.label)(base_id)).into()
             })?;
         }
         Ok(())

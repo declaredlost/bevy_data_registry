@@ -39,7 +39,9 @@ pub struct Registry<T: Definition> {
     /// it's indexed and validated.
     defs: HashMap<T::Id, Arc<T>>,
     /// The names of the kind's [`Id`](crate::Id)s, by hash, as read in
-    /// any file: its own and references to it.
+    /// any file: its own and references to it. Never forgotten, so one
+    /// kept from before a reload names what it refers to though no file
+    /// does now: a hash is only ever of one name, but for collisions.
     names: HashMap<u64, Box<str>>,
 }
 
@@ -164,24 +166,28 @@ impl<T: Definition> Registry<T> {
             .map_or_else(|| id.to_string(), crate::id::escaped)
     }
 
-    /// Keeps the names of the kind's [`Id`]s read in `files`; returns two
-    /// names with one hash, as errors.
+    /// Keeps the names of the kind's [`Id`]s read in `files`, over those
+    /// read before; returns two names with one hash in them, as errors.
     fn name_ids(&mut self, files: &[&DataFile]) -> Vec<String> {
         let mut errors = Vec::new();
-        self.names.clear();
+        let mut read: HashMap<u64, &str> = HashMap::default();
         for file in files {
             for (hash, name) in file.names().of(core::any::TypeId::of::<T>()) {
-                match self.names.get(&hash) {
-                    Some(kept) if **kept != *name => errors.push(format!(
-                        "{} ids `{kept}` and `{name}` have the same hash ({hash:#018x}): rename one",
+                match read.get(&hash) {
+                    Some(first) if *first != name => errors.push(format!(
+                        "{} ids `{first}` and `{name}` have the same hash ({hash:#018x}): rename \
+                         one",
                         self.name
                     )),
                     Some(_) => {}
                     None => {
-                        self.names.insert(hash, name.into());
+                        read.insert(hash, name);
                     }
                 }
             }
+        }
+        for (hash, name) in read {
+            self.names.insert(hash, name.into());
         }
         errors
     }
@@ -398,6 +404,22 @@ mod tests {
             registry.locations.contains_key("orphan"),
             "its path is still known, for messages"
         );
+    }
+
+    #[test]
+    fn a_name_read_once_is_known_after_no_file_has_it() {
+        use core::any::TypeId;
+
+        use crate::id::Names;
+
+        let mut names = Names::default();
+        names.keep(TypeId::of::<Thing>(), 7, "metal");
+        let mut assets = Assets::<DataFile>::default();
+        let file = assets.add(of_defs_named(Vec::<Thing>::new(), names)).id();
+        let mut registry = registry::<Thing>();
+        registry.index(&[(file, AssetPath::from("0.ron"))], &assets);
+        reindex(&mut registry, vec![vec![]]);
+        assert_eq!(registry.names.get(&7).map(AsRef::as_ref), Some("metal"));
     }
 
     #[test]

@@ -55,8 +55,8 @@ impl<T: Definition> Definitions<'_, T> {
     }
 
     /// The name `id` was read from, if it's an [`Id`](crate::Id) read in
-    /// a data file, as a definition's own or a reference to one: `Id`s show
-    /// as their hash.
+    /// a data file, as a definition's own or a reference to one, on this
+    /// load or one before: `Id`s show as their hash.
     pub fn name(&self, id: &T::Id) -> Option<&str> {
         self.registry.name(id)
     }

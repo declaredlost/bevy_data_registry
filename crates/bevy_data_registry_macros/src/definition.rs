@@ -95,7 +95,7 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
     });
     // Its `References` isn't what's written: a field holding the kind
     // itself isn't one.
-    let walker = Walker::new(&krate, &input.generics, None);
+    let walker = Walker::new(&krate);
     let references = references_fn(&walker, fields, id, marked.base)?;
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
 
@@ -143,7 +143,7 @@ fn references_fn<'a>(
         };
         let name = ident.to_string();
         let name = name.strip_prefix("r#").unwrap_or(&name);
-        walks.extend(walker.field(name, &quote!(&def.#ident), &field.ty));
+        walks.push(walker.field(name, &quote!(&def.#ident)));
     }
     let walking = walker.walking();
     Ok(quote! {

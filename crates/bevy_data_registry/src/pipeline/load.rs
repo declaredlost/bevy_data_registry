@@ -95,25 +95,20 @@ impl Folder<'_> {
         self.data.handle.as_ref().map(Handle::id)
     }
 
-    /// Holds the file its reload failed on, if it did: so Bevy reloads it
-    /// when it's saved again.
-    fn hold_failing(&mut self) {
-        let Some(handle) = self.handle() else {
-            return;
-        };
-        if let LoadState::Failed(error) = self.asset_server.load_state(handle)
-            && let Some(path) = failing_file(&error)
-            && self.data.holds(&path)
-            && !self.data.broken.iter().any(|(held, _)| *held == path)
-        {
-            let file = self.asset_server.load(path.clone());
-            self.data.broken.push((path, file));
+    /// Holds the files its reloads failed on, `failing`: so Bevy reloads
+    /// each when it's saved again.
+    fn hold_failing(&mut self, failing: &[AssetPath<'static>]) {
+        for path in failing {
+            if self.data.holds(path) && !self.data.broken.iter().any(|(held, _)| held == path) {
+                let file = self.asset_server.load(path.clone());
+                self.data.broken.push((path.clone(), file));
+            }
         }
     }
 
     /// Keeps what's broken and recovered up to date, as `seen`: after a
     /// listing, and once a broken file loads.
-    fn track(&mut self, seen: Seen) {
+    fn track(&mut self, seen: &Seen) {
         if seen.folder {
             // Those the new listing has are fixed; the rest may have failed
             // after it started, so are held still.
@@ -125,8 +120,17 @@ impl Folder<'_> {
                 .map(AssetPath::into_owned)
                 .collect();
             self.data.broken.retain(|(path, _)| !listed.contains(path));
-            // Those it has are listed; those it hasn't are gone.
-            self.data.recovered.clear();
+            // Those it has are listed. One it hasn't may be gone, or left
+            // out by a scan begun before it loaded: kept until a listing
+            // has it, or it's not found.
+            let asset_server = &self.asset_server;
+            self.data.recovered.retain(|(path, file)| {
+                !listed.contains(path)
+                    && !matches!(
+                        asset_server.load_state(file),
+                        LoadState::Failed(error) if is_not_found(&error)
+                    )
+            });
         }
         if seen.fixed {
             // What loaded is indexed as it is until a listing has it.
@@ -164,8 +168,12 @@ impl Folder<'_> {
             }
             LoadState::Failed(error) => self.first_load_failed(&error, errors),
             LoadState::Loaded => {
-                let mut files = list(&self.asset_server, self.listing()?, errors)?;
-                self.add_recovered(&mut files, errors)?;
+                // Pushed once both are settled: tried again next frame if
+                // not, they'd be pushed twice.
+                let mut failed = Vec::new();
+                let mut files = list(&self.asset_server, self.listing()?, &mut failed)?;
+                self.add_recovered(&mut files, &mut failed)?;
+                errors.extend(failed);
                 files.sort_by(|(_, a), (_, b)| a.path().cmp(b.path()));
                 Some(Settled::Files(files))
             }
@@ -205,12 +213,12 @@ impl Folder<'_> {
     }
 
     /// Adds to `files`, a listing's, those recovered it hasn't: as a listed
-    /// file is, its failure pushed to `errors`. `None` while one is still
+    /// file is, its failure pushed to `failed`. `None` while one is still
     /// loading.
     fn add_recovered(
         &self,
         files: &mut Vec<(AssetId<DataFile>, AssetPath<'static>)>,
-        errors: &mut DataErrors,
+        failed: &mut Vec<String>,
     ) -> Option<()> {
         for (path, file) in &self.data.recovered {
             if files.iter().any(|(_, listed)| listed == path) {
@@ -219,7 +227,7 @@ impl Folder<'_> {
             match self.asset_server.load_state(file) {
                 LoadState::NotLoaded | LoadState::Loading => return None,
                 LoadState::Failed(error) if is_not_found(&error) => continue,
-                LoadState::Failed(error) => errors.push(error.to_string()),
+                LoadState::Failed(error) => failed.push(error.to_string()),
                 LoadState::Loaded => {}
             }
             files.push((file.id(), path.clone()));
@@ -257,7 +265,7 @@ impl Pipeline<'_> {
     /// Whether to see where the folder is: on first load, until indexing's
     /// due; once loaded, once something's changed (as `seen`) since it was
     /// last indexed.
-    fn waiting(&mut self, seen: Seen) -> bool {
+    fn waiting(&mut self, seen: &Seen) -> bool {
         match self.state.get() {
             DataState::Loading => !self.progress.due,
             DataState::Loaded => {
@@ -305,7 +313,7 @@ pub(super) struct Changes<'w, 's> {
 
 /// What changed this frame, of what the pipeline keeps. Each can with the
 /// others, and each is acted on its own way.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default)]
 #[expect(clippy::struct_excessive_bools, reason = "each can with the others")]
 struct Seen {
     /// A data file was modified or removed, or failed to load again: to
@@ -313,15 +321,18 @@ struct Seen {
     files: bool,
     /// The folder was listed again: what it lists is fixed.
     folder: bool,
-    /// The folder's reload failed: the file it failed on to be held.
+    /// The folder's reload failed.
     folder_failed: bool,
+    /// The files its reloads failed on, as each failure said: to be held,
+    /// though another reload may have listed the folder since.
+    failing: Vec<AssetPath<'static>>,
     /// A file held as broken loaded: to be indexed.
     fixed: bool,
 }
 
 impl Seen {
     /// Whether anything did.
-    fn any(self) -> bool {
+    fn any(&self) -> bool {
         self.files || self.folder || self.folder_failed || self.fixed
     }
 }
@@ -364,7 +375,10 @@ impl Changes<'_, '_> {
             seen.folder |= event.is_modified(handle);
         }
         for failure in self.folder_failures.read() {
-            seen.folder_failed |= failure.id == handle;
+            if failure.id == handle {
+                seen.folder_failed = true;
+                seen.failing.extend(failing_file(&failure.error));
+            }
         }
         seen
     }
@@ -378,12 +392,12 @@ pub(super) fn settle(mut folder: Folder, mut messages: Changes, mut pipeline: Pi
         return;
     };
     let seen = messages.read(&pipeline.files, &folder.data, handle);
-    if pipeline.loaded() && seen.folder_failed {
+    if pipeline.loaded() {
         // Added, or changed, and failing the folder's reload with it.
-        folder.hold_failing();
+        folder.hold_failing(&seen.failing);
     }
-    folder.track(seen);
-    if !pipeline.waiting(seen) {
+    folder.track(&seen);
+    if !pipeline.waiting(&seen) {
         return;
     }
     let reloading = pipeline.loaded();
@@ -393,14 +407,13 @@ pub(super) fn settle(mut folder: Folder, mut messages: Changes, mut pipeline: Pi
 }
 
 /// Every data file of `folder`, by path; `None` while one is still
-/// loading. Pushes to `errors` those that failed to.
+/// loading. Pushes to `failed` those that failed to.
 fn list(
     asset_server: &AssetServer,
     folder: &LoadedFolder,
-    errors: &mut DataErrors,
+    failed: &mut Vec<String>,
 ) -> Option<Vec<(AssetId<DataFile>, AssetPath<'static>)>> {
     let mut files = Vec::new();
-    let mut failed = Vec::new();
     for handle in &folder.handles {
         let Ok(handle) = handle.clone().try_typed::<DataFile>() else {
             // Another loader claims its extension: as data, it'd be lost.
@@ -426,7 +439,6 @@ fn list(
         }
         files.push((handle.id(), path.into_owned()));
     }
-    errors.extend(failed);
     files.sort_by(|(_, a), (_, b)| a.path().cmp(b.path()));
     Some(files)
 }

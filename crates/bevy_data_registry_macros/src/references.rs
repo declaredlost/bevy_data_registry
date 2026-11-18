@@ -3,10 +3,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::visit::Visit;
-use syn::{
-    Data, DeriveInput, Error, Field, Fields, Generics, Ident, LitStr, Member, Path, Result, Type,
-};
+use syn::{Data, DeriveInput, Error, Field, Fields, Ident, LitStr, Member, Path, Result};
 
 /// Whether `field` is marked `#[definition(unchecked)]`: its `Id`s aren't
 /// checked. `others` says what else the field's `#[definition(..)]` may
@@ -38,26 +35,12 @@ pub(crate) fn unchecked(field: &Field, others: &[&str]) -> Result<bool> {
 pub(crate) struct Walker<'a> {
     /// The path to `bevy_data_registry`.
     krate: &'a TokenStream,
-    /// The type's own name, if the impl being written is its `References`:
-    /// a field holding the type itself is then one too.
-    owner: Option<&'a Ident>,
-    /// The type's type parameters.
-    params: Vec<&'a Ident>,
 }
 
 impl<'a> Walker<'a> {
-    /// A walker of the fields of a type with `generics`, for the impl
-    /// written: its `References` if `owner`, its name, is given.
-    pub(crate) fn new(
-        krate: &'a TokenStream,
-        generics: &'a Generics,
-        owner: Option<&'a Ident>,
-    ) -> Self {
-        Self {
-            krate,
-            owner,
-            params: generics.type_params().map(|param| &param.ident).collect(),
-        }
+    /// A walker of a type's fields, `krate` the path to the crate.
+    pub(crate) fn new(krate: &'a TokenStream) -> Self {
+        Self { krate }
     }
 
     /// The `use` that walking needs in scope.
@@ -69,41 +52,27 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// Visits the `Id`s of `value`, a field named `name` (for messages) of
-    /// type `ty`, if its type is `References`; nothing if it's not, or if
-    /// that can't be known for every value of the type's parameters.
+    /// Visits the `Id`s of `value`, a field named `name` (for messages), if
+    /// its type is `References`; nothing if it's not.
     ///
-    /// A type naming none of them is walked by autoref: `References` if it
-    /// is. One naming them only inside `Id<..>` (`Vec<Id<T>>`), or inside
-    /// the type itself where its `References` is written, is `References`
-    /// whatever they are: visited directly. One naming them elsewhere
-    /// (`payload: T`) isn't walked: bounding the impl by it would leave the
-    /// type no `References` at all where it isn't one, its other `Id`s
-    /// unchecked with it.
-    pub(crate) fn field(&self, name: &str, value: &TokenStream, ty: &Type) -> Option<TokenStream> {
+    /// Picked by autoref, where the impl is written: in a generic type, by
+    /// what's known of its parameters there. `Vec<Id<T>>` is walked, as
+    /// it's `References` whatever `T` is; `payload: T` is only if `T` is
+    /// bound by `References`.
+    pub(crate) fn field(&self, name: &str, value: &TokenStream) -> TokenStream {
         let krate = self.krate;
-        let walk = match self.parameters_in(ty) {
-            Parameters::None => quote! {
-                // Autoref picks `ViaReferences` if the field's type is
-                // `References`, `ViaNothing` if not.
-                #[allow(clippy::needless_borrow)]
-                (&&#krate::__private::Walk(#value)).walk(to);
-            },
-            Parameters::InIds => quote! {
-                #krate::References::visit_references(#value, to);
-            },
-            Parameters::Elsewhere => return None,
-        };
-        Some(quote! {
+        quote! {
             to.enter(#name);
-            #walk
+            // Autoref picks `ViaReferences` if the field's type is
+            // `References`, `ViaNothing` if not.
+            #[allow(clippy::needless_borrow)]
+            (&&#krate::__private::Walk(#value)).walk(to);
             to.leave();
-        })
+        }
     }
 
     /// The walks of `fields`, each reached by `access` from its member;
-    /// those marked `#[definition(unchecked)]`, or that can't be walked,
-    /// left out.
+    /// those marked `#[definition(unchecked)]` left out.
     fn fields(
         &self,
         fields: &Fields,
@@ -119,76 +88,10 @@ impl<'a> Walker<'a> {
                 Member::Unnamed(index) => index.index.to_string(),
             };
             let name = name.strip_prefix("r#").unwrap_or(&name);
-            walks.extend(self.field(name, &access(&member), &field.ty));
+            walks.push(self.field(name, &access(&member)));
         }
         Ok(walks)
     }
-
-    /// Where `ty` names the type's parameters.
-    fn parameters_in(&self, ty: &Type) -> Parameters {
-        struct Finder<'a, 'b> {
-            walker: &'b Walker<'a>,
-            named: bool,
-            elsewhere: bool,
-        }
-        impl<'ast> Visit<'ast> for Finder<'_, '_> {
-            fn visit_path(&mut self, path: &'ast Path) {
-                let is = |ident: &Ident, name: &Ident| ident == name;
-                if let Some(first) = path.segments.first()
-                    && self
-                        .walker
-                        .params
-                        .iter()
-                        .any(|param| is(&first.ident, param))
-                {
-                    self.named = true;
-                    self.elsewhere = true;
-                    return;
-                }
-                // `References` whatever its arguments: not looked into.
-                let safe = path.segments.last().is_some_and(|last| {
-                    last.ident == "Id"
-                        || self.walker.owner.is_some_and(|owner| last.ident == *owner)
-                        || (self.walker.owner.is_some() && last.ident == "Self")
-                });
-                if safe {
-                    let mut inside = Finder {
-                        walker: self.walker,
-                        named: false,
-                        elsewhere: false,
-                    };
-                    syn::visit::visit_path(&mut inside, path);
-                    self.named |= inside.named;
-                    return;
-                }
-                syn::visit::visit_path(self, path);
-            }
-        }
-        if self.params.is_empty() {
-            return Parameters::None;
-        }
-        let mut finder = Finder {
-            walker: self,
-            named: false,
-            elsewhere: false,
-        };
-        finder.visit_type(ty);
-        match (finder.named, finder.elsewhere) {
-            (false, _) => Parameters::None,
-            (true, false) => Parameters::InIds,
-            (true, true) => Parameters::Elsewhere,
-        }
-    }
-}
-
-/// Where a field's type names the type's parameters.
-enum Parameters {
-    /// Nowhere.
-    None,
-    /// Only inside what's `References` whatever they are.
-    InIds,
-    /// Elsewhere too.
-    Elsewhere,
 }
 
 /// The path to `bevy_data_registry`: `#[definition(crate = "..")]` on the
@@ -217,7 +120,7 @@ fn krate(input: &DeriveInput) -> Result<TokenStream> {
 pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
     let krate = krate(input)?;
     let name = &input.ident;
-    let walker = Walker::new(&krate, &input.generics, Some(name));
+    let walker = Walker::new(&krate);
     let body = match &input.data {
         Data::Struct(data) => {
             let walks = walker.fields(&data.fields, |member| quote!(&self.#member))?;
@@ -323,28 +226,21 @@ mod tests {
     }
 
     #[test]
-    fn a_parameter_inside_an_id_is_walked_and_elsewhere_isnt() {
+    fn a_generic_types_fields_are_walked_by_autoref_and_unbound() {
         let walked = expand(&parse_quote! {
             struct Drop<T: 'static> {
-                item: Id<T>,
                 items: Vec<Id<T>>,
-                next: Option<Box<Drop<T>>>,
                 payload: T,
-                tagged: Vec<Id<Item>>,
             }
         })
         .unwrap()
         .to_string();
-        for direct in ["item", "items", "next"] {
+        for field in ["items", "payload"] {
             assert!(
-                walked.contains(&format!(
-                    "References :: visit_references (& self . {direct} , to)"
-                )),
-                "{direct}: {walked}"
+                walked.contains(&format!("Walk (& self . {field})")),
+                "{field}: {walked}"
             );
         }
-        assert!(!walked.contains(r#""payload""#), "{walked}");
-        assert!(walked.contains(r#""tagged""#), "{walked}");
         assert!(!walked.contains("where"), "no bounds: {walked}");
     }
 

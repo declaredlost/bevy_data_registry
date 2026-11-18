@@ -29,11 +29,11 @@ use crate::id::{Id, short_type_name};
 ///
 /// A field of a type that isn't one is skipped, without a word: a type of
 /// your own holding [`Id`]s needs the derive, or they go unchecked. So is
-/// a field marked `#[definition(unchecked)]`. A field whose type names one
-/// of the deriving type's parameters only inside `Id<..>` (`Vec<Id<T>>`),
-/// or inside the type itself (`next: Option<Box<Node<T>>>`), is walked; one
-/// naming it elsewhere (`payload: T`) isn't, as it may not be `References`,
-/// and the rest of the type is walked all the same.
+/// a field marked `#[definition(unchecked)]`. In a generic type, a field
+/// is walked if it's `References` by what the type says of its parameters:
+/// `Vec<Id<T>>` and `next: Option<Box<Node<T>>>` are, whatever `T` is;
+/// `payload: T` is only if `T` is bound by `References`, and the rest of
+/// the type is walked all the same.
 ///
 /// An error names the field an [`Id`] is in by its path from the
 /// definition: `finds.tag`.
@@ -264,6 +264,8 @@ mod tests {
     struct Node<T: 'static> {
         item: Id<T>,
         next: Option<Box<Node<T>>>,
+        /// `Note` isn't `References`: skipped, as it'd be in any type.
+        outcome: Result<Id<T>, Note>,
     }
 
     #[test]
@@ -273,7 +275,9 @@ mod tests {
             next: Some(Box::new(Node {
                 item: Id::from_name("second"),
                 next: None,
+                outcome: Ok(Id::from_name("unseen")),
             })),
+            outcome: Err(Note(Id::from_name("unseen"))),
         };
         let mut to = Referenced::default();
         list.visit_references(&mut to);
@@ -286,11 +290,10 @@ mod tests {
     }
 
     /// A generic type with a field of a parameter's own type: that field
-    /// isn't walked, the rest are, whatever the parameter.
+    /// isn't walked, unbound, the rest are, whatever the parameter.
     #[derive(crate::References)]
     struct Loot<T> {
         item: Id<Item>,
-        #[expect(dead_code, reason = "only walked past")]
         payload: T,
     }
 
@@ -309,6 +312,26 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].field, "loot.item");
         assert_eq!(found[0].hash, Id::<Item>::from_name("pelt").hash());
+    }
+
+    /// A generic type whose parameter is bound by `References`.
+    #[derive(crate::References)]
+    struct Bound<T: References> {
+        payload: T,
+    }
+
+    #[test]
+    fn a_parameter_bound_by_references_is_walked() {
+        let bound = Bound {
+            payload: Find {
+                tag: Id::from_name("fang"),
+            },
+        };
+        let mut to = Referenced::default();
+        bound.visit_references(&mut to);
+        let found = to.into_found();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].field, "payload.tag");
     }
 
     #[test]
