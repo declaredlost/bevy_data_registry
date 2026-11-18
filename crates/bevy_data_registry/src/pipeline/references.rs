@@ -1,36 +1,46 @@
-//! Checking references: every [`Id`](crate::Id) in a definition but its
-//! own names a definition of its kind.
+//! Checking references: every [`Id`](crate::Id) in a definition, but its
+//! own and its base, names a definition
+//! [`Definitions::get`](crate::Definitions::get) finds.
 
 use bevy::prelude::*;
 
 use super::DataErrors;
-use super::load::DataFiles;
 use crate::file::{DataFile, Kinds};
+use crate::registry::Target;
 
 /// Pushes to [`DataErrors`] every [`Id`](crate::Id) in a definition, but
-/// its own, that names no definition of its kind: of every file, once
-/// every kind is indexed.
+/// its own and its base, that names no definition `get` finds: of what the
+/// registry gives (whole, or kept from before a reload), once every kind is
+/// indexed.
 pub(super) fn check(world: &mut World) {
     let kinds = world.resource::<Kinds>().clone();
     let kinds = kinds.read();
-    let files = world.resource::<DataFiles>();
     let assets = world.resource::<Assets<DataFile>>();
     let mut errors = Vec::new();
-    for (file, path) in &files.0 {
-        let Some(file) = assets.get(*file) else {
-            continue;
-        };
-        for (kind, id, references) in file.references(&kinds) {
-            for reference in references {
+    for kind in kinds.iter() {
+        for from in (kind.referenced)(world) {
+            for reference in from.references {
                 let to = kinds.iter().find(|to| to.id == reference.kind);
-                let found = to.map(|to| (to, (to.contains)(world, reference.hash)));
-                if let Some((_, Some(true))) = found {
+                let lookup = to.map(|to| (to, (to.lookup)(world, reference.hash)));
+                if let Some((_, Some((Target::Read | Target::Unresolved, _)))) = lookup {
                     continue;
                 }
-                let name = file.names().show(reference.kind, reference.hash);
-                let problem = match found {
-                    Some((_, Some(true))) => continue,
-                    Some((to, Some(false))) => {
+                // By the name its kind read it as, or its file did.
+                let named = lookup
+                    .as_ref()
+                    .and_then(|(_, found)| found.as_ref()?.1.clone());
+                let name = named.unwrap_or_else(|| {
+                    assets.get(from.file).map_or_else(
+                        || format!("#{:016x}", reference.hash),
+                        |file| file.names().show(reference.kind, reference.hash),
+                    )
+                });
+                let problem = match lookup {
+                    Some((to, Some((Target::Family, _)))) => format!(
+                        "refers to {} `{name}`, a family: families are only built on",
+                        to.name
+                    ),
+                    Some((to, Some(_))) => {
                         format!("refers to {} `{name}`, which isn't there", to.name)
                     }
                     Some((to, None)) => format!(
@@ -43,8 +53,8 @@ pub(super) fn check(world: &mut World) {
                     ),
                 };
                 errors.push(format!(
-                    "{} `{id}` ({path}): `{}` {problem}",
-                    kind.name, reference.field
+                    "{} `{}` ({}): `{}` {problem}",
+                    kind.name, from.id, from.path, reference.field
                 ));
             }
         }

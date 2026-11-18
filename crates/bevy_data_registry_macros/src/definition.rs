@@ -55,29 +55,26 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
         ));
     }
 
-    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
     let id_ident = &id.ident;
     let id_type = &id.ty;
+    let family = marked.family.map(|family| {
+        let family = &family.ident;
+        quote!(.family(|def| def.#family))
+    });
     let families = marked.base.map(|base| {
         let base = &base.ident;
         quote! {
-            fn base(&self) -> ::core::option::Option<&Self::Id> {
-                ::core::option::Option::as_ref(&self.#base)
-            }
-
-            fn inherit(&self, base: &Self) -> ::core::option::Option<Self> {
-                let mut this = ::core::clone::Clone::clone(self);
-                #krate::Inherit::inherit(&mut this, base);
-                ::core::option::Option::Some(this)
-            }
-        }
-    });
-    let family = marked.family.map(|family| {
-        let family = &family.ident;
-        quote! {
-            fn is_family(&self) -> bool {
-                self.#family
-            }
+            .families(
+                #krate::Families::<Self>::new(
+                    |def| ::core::option::Option::as_ref(&def.#base),
+                    |def, base| {
+                        let mut this = ::core::clone::Clone::clone(def);
+                        #krate::Inherit::inherit(&mut this, base);
+                        this
+                    },
+                )
+                #family
+            )
         }
     });
 
@@ -96,12 +93,12 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
             let _: &#krate::Id<Self> = &self.#id_ident;
         }
     });
-    let references = references_fn(&krate, fields, id, marked.base, &input.generics)?;
+    let (references, bounds) = references_fn(&krate, fields, id, marked.base, &input.generics)?;
+    let generics = references::bound(&input.generics, bounds);
+    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
         impl #impl_generics #krate::Definition for #name #type_generics #where_clause {
-            const NAME: &'static str = #kind;
-
             type Id = #id_type;
 
             fn id(&self) -> &Self::Id {
@@ -109,30 +106,32 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
                 &self.#id_ident
             }
 
-            #references
-
-            fn resolvers() -> ::std::vec::Vec<::std::boxed::Box<dyn #krate::resolve::Resolve>> {
-                ::std::vec![#(::std::boxed::Box::new(#resolvers)),*]
+            fn info() -> #krate::DefinitionInfo<Self> {
+                #krate::DefinitionInfo::<Self>::new(
+                    #kind,
+                    ::std::vec![#(::std::boxed::Box::new(#resolvers)),*],
+                )
+                .references(#references)
+                #families
             }
-
-            #families
-            #family
         }
     })
 }
 
 const NAMED_ONLY: &str = "a definition is a struct with named fields";
 
-/// `fn references`: walking every field but the id, the base (checked as
-/// families are made whole) and those marked `#[definition(unchecked)]`.
+/// The closure finding a definition's references: walking every field but
+/// the id, the base (checked as families are made whole) and those marked
+/// `#[definition(unchecked)]`.
 fn references_fn<'a>(
     krate: &TokenStream,
     fields: impl IntoIterator<Item = &'a Field>,
     id: &Field,
     base: Option<&Field>,
     generics: &syn::Generics,
-) -> Result<TokenStream> {
+) -> Result<(TokenStream, Vec<syn::WherePredicate>)> {
     let mut walks = Vec::new();
+    let mut bounds = Vec::new();
     for field in fields.into_iter().filter(|field| {
         !core::ptr::eq(*field, id) && !base.is_some_and(|base| core::ptr::eq(*field, base))
     }) {
@@ -144,21 +143,20 @@ fn references_fn<'a>(
         };
         let name = ident.to_string();
         let name = name.strip_prefix("r#").unwrap_or(&name);
-        walks.extend(references::walk(
-            krate,
-            name,
-            &quote!(&self.#ident),
-            &field.ty,
-            generics,
-        ));
+        let (walk, bound) =
+            references::walk(krate, name, &quote!(&def.#ident), &field.ty, generics);
+        walks.push(walk);
+        bounds.extend(bound);
     }
     let walking = references::walking(krate);
-    Ok(quote! {
-        fn references(&self, to: &mut #krate::Referenced) {
+    let closure = quote! {
+        |def, to| {
+            let _ = (&def, &to);
             #walking
             #(#walks)*
         }
-    })
+    };
+    Ok((closure, bounds))
 }
 
 /// Whether `ty` is written as an `Id<..>`: checked to be the kind's own.
@@ -327,7 +325,7 @@ mod tests {
         .unwrap();
         assert!(
             item.to_string()
-                .contains(r#"const NAME : & 'static str = "Item""#),
+                .contains(r#"DefinitionInfo :: < Self > :: new ("Item""#),
             "{item}"
         );
     }
@@ -404,12 +402,12 @@ mod tests {
             item.contains("let _ : & :: bevy_data_registry :: Id < Self > = & self . id"),
             "{item}"
         );
-        assert!(item.contains(r#"to . field ("drops")"#), "{item}");
-        assert!(item.contains(r#"to . field ("health")"#), "{item}");
+        assert!(item.contains(r#"to . enter ("drops")"#), "{item}");
+        assert!(item.contains(r#"to . enter ("health")"#), "{item}");
         assert!(!item.contains(r#""rumoured""#), "unchecked: {item}");
-        assert!(!item.contains(r#"to . field ("id")"#), "its own: {item}");
+        assert!(!item.contains(r#"to . enter ("id")"#), "its own: {item}");
         assert!(
-            !item.contains(r#"to . field ("base")"#),
+            !item.contains(r#"to . enter ("base")"#),
             "checked by families: {item}"
         );
         let named = expand(&parse_quote! {
@@ -458,8 +456,17 @@ mod tests {
         })
         .unwrap()
         .to_string();
-        assert!(families.contains("fn base") && families.contains("Inherit :: inherit"));
-        assert!(families.contains("self . family") && families.contains("self . name"));
+        assert!(
+            families.contains(". families (:: bevy_data_registry :: Families :: < Self > :: new")
+                && families.contains("Option :: as_ref (& def . parent)")
+                && families.contains("Inherit :: inherit"),
+            "{families}"
+        );
+        assert!(
+            families.contains(". family (| def | def . family)")
+                && families.contains("self . name"),
+            "{families}"
+        );
         let lone = error(&parse_quote! {
             struct Item { id: String, #[definition(family)] family: bool }
         });

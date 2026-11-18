@@ -29,7 +29,12 @@ use crate::id::{Id, short_type_name};
 ///
 /// A field of a type that isn't one is skipped, without a word: a type of
 /// your own holding [`Id`]s needs the derive, or they go unchecked. So is
-/// a field marked `#[definition(unchecked)]`.
+/// a field marked `#[definition(unchecked)]`. A field whose type names one
+/// of the deriving type's parameters (`item: Id<T>`, `payload: T`) is
+/// walked, and the derived impl bound by it being `References`.
+///
+/// An error names the field an [`Id`] is in by its path from the
+/// definition: `finds.tag`.
 pub trait References {
     /// Visits every [`Id`] in it.
     fn visit_references(&self, to: &mut Referenced);
@@ -38,15 +43,16 @@ pub trait References {
 /// The [`Id`]s found in a definition, with the fields they're in, as walked.
 #[derive(Debug, Default)]
 pub struct Referenced {
-    field: &'static str,
+    /// The fields being walked, outermost first: `finds`, `tag`.
+    path: Vec<&'static str>,
     found: Vec<Reference>,
 }
 
 /// An [`Id`] found in a definition: the kind it's an id of, its hash, and
-/// the field it's in.
-#[derive(Debug, Clone, Copy)]
+/// the field it's in, as a path from the definition: `finds.tag`.
+#[derive(Debug, Clone)]
 pub(crate) struct Reference {
-    pub field: &'static str,
+    pub field: String,
     pub kind: TypeId,
     /// The kind's type name, if it's no registered kind, for messages.
     pub kind_name: &'static str,
@@ -54,10 +60,17 @@ pub(crate) struct Reference {
 }
 
 impl Referenced {
-    /// Says the [`Id`]s visited next are in `field`. Called by the derives.
+    /// Says the [`Id`]s visited until [`leave`](Self::leave) are in
+    /// `field`, of what's being walked. Called by the derives.
     #[doc(hidden)]
-    pub fn field(&mut self, field: &'static str) {
-        self.field = field;
+    pub fn enter(&mut self, field: &'static str) {
+        self.path.push(field);
+    }
+
+    /// Ends the field [`enter`](Self::enter) began. Called by the derives.
+    #[doc(hidden)]
+    pub fn leave(&mut self) {
+        self.path.pop();
     }
 
     /// Every [`Id`] found.
@@ -69,7 +82,7 @@ impl Referenced {
 impl<T: 'static> References for Id<T> {
     fn visit_references(&self, to: &mut Referenced) {
         to.found.push(Reference {
-            field: to.field,
+            field: to.path.join("."),
             kind: TypeId::of::<T>(),
             kind_name: short_type_name::<T>(),
             hash: self.hash(),
@@ -228,6 +241,32 @@ mod tests {
 
     struct Item;
 
+    /// A type of the app's own, with the derive.
+    #[derive(crate::References)]
+    struct Find {
+        tag: Id<Item>,
+    }
+
+    #[test]
+    fn a_nested_field_is_named_by_its_path_and_left_after() {
+        let reward = (
+            Find {
+                tag: Id::from_name("fang"),
+            },
+            Id::<Item>::from_name("pelt"),
+        );
+        let mut to = Referenced::default();
+        to.enter("reward");
+        (&&Walk(&reward)).walk(&mut to);
+        to.leave();
+        let fields: Vec<String> = to
+            .into_found()
+            .into_iter()
+            .map(|found| found.field)
+            .collect();
+        assert_eq!(fields, ["reward.tag", "reward"]);
+    }
+
     /// A type of the app's own, without the derive: skipped.
     struct Note(#[expect(dead_code, reason = "only walked past")] Id<Item>);
 
@@ -236,22 +275,26 @@ mod tests {
         let pelt = Id::<Item>::from_name("pelt");
         let drops = vec![Some(pelt), None, Some(Id::from_name("fang"))];
         let mut to = Referenced::default();
-        to.field("drops");
+        to.enter("drops");
         (&&Walk(&drops)).walk(&mut to);
-        to.field("note");
+        to.leave();
+        to.enter("note");
         #[expect(clippy::needless_borrow, reason = "as the derives write it")]
         (&&Walk(&Note(pelt))).walk(&mut to);
-        to.field("health");
+        to.leave();
+        to.enter("health");
         (&&Walk(&35_u32)).walk(&mut to);
         let table: HashMap<String, Vec<(Id<Item>, f32)>> =
             HashMap::from([("common".to_owned(), vec![(pelt, 0.5)])]);
-        to.field("table");
+        to.leave();
+        to.enter("table");
         (&&Walk(&table)).walk(&mut to);
         let shared: Arc<[Id<Item>]> = Arc::from([pelt]);
-        to.field("shared");
+        to.leave();
+        to.enter("shared");
         (&&Walk(&shared)).walk(&mut to);
         let found = to.into_found();
-        let fields: Vec<&str> = found.iter().map(|found| found.field).collect();
+        let fields: Vec<&str> = found.iter().map(|found| found.field.as_str()).collect();
         assert_eq!(fields, ["drops", "drops", "table", "shared"]);
         assert_eq!(found[0].field, "drops");
         assert_eq!(found[0].kind_name, "Item");

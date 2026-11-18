@@ -16,8 +16,7 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use crate::Definition;
 use crate::format::DataFormat;
 use crate::id::{self, Id, Names};
-use crate::references::{Reference, Referenced};
-use crate::registry::Registry;
+use crate::registry::{Referencing, Registry, Target};
 use crate::resolve::Resolve;
 
 /// The definitions read from one data file, all of the kind that claims it.
@@ -58,19 +57,6 @@ impl DataFile {
         &self.names
     }
 
-    /// Every definition's kind, its id by name, and the [`Id`]s in it but
-    /// its own, as `kinds` knows them.
-    pub(crate) fn references<'a>(
-        &'a self,
-        kinds: &'a [Kind],
-    ) -> impl Iterator<Item = (&'a Kind, String, Vec<Reference>)> {
-        self.entries.iter().filter_map(|entry| {
-            let kind = kinds.iter().find(|kind| kind.id == entry.kind)?;
-            let label = (kind.label)(&*entry.value, &self.names);
-            Some((kind, label, (kind.references)(&*entry.value)))
-        })
-    }
-
     /// Its definitions of kind `T`, with their positions in the file.
     pub(crate) fn of<T: Definition>(&self) -> impl Iterator<Item = (usize, &T)> {
         self.entries.iter().enumerate().filter_map(|(at, entry)| {
@@ -107,7 +93,6 @@ impl DataFile {
     }
 
     /// Its definition at `at`, if it's of kind `T`.
-    #[cfg(test)]
     pub(crate) fn get<T: Definition>(&self, at: usize) -> Option<&T> {
         self.entries.get(at)?.value.downcast_ref()
     }
@@ -145,14 +130,13 @@ pub(crate) struct Kind {
     pub name: &'static str,
     resolvers: Vec<Box<dyn Resolve>>,
     deserialize: DeserializeFn,
-    /// A definition's id by name, from its file's names: the definition one
-    /// of its kind.
-    label: fn(&(dyn Any + Send + Sync), &Names) -> String,
-    /// The [`Id`]s in a definition, one of its kind, but its own.
-    references: fn(&(dyn Any + Send + Sync)) -> Vec<Reference>,
-    /// Whether there's a definition of the kind whose [`Id`](crate::Id)
-    /// has this hash, families included; `None` if its ids aren't `Id`s.
-    pub contains: fn(&World, u64) -> Option<bool>,
+    /// The references in every definition of the kind, as read: what
+    /// [`Definitions`](crate::Definitions) gives, families and those whose
+    /// bases don't resolve as written.
+    pub referenced: fn(&World) -> Vec<Referencing>,
+    /// What an [`Id`](crate::Id) of the kind with this hash names, and its
+    /// name if read; `None` if the kind's ids aren't `Id`s.
+    pub lookup: fn(&World, u64) -> Option<(Target, Option<String>)>,
 }
 
 type DeserializeFn = fn(
@@ -170,49 +154,46 @@ impl Kind {
 }
 
 impl Kinds {
-    /// Adds kind `T`. `false` if it already was.
+    /// Adds kind `T`, named `name`, whose files `resolvers` claim. `false`
+    /// if it already was.
     ///
     /// # Panics
     ///
-    /// If `T::resolvers()` is empty: whether any files match isn't checked.
-    pub fn add<T: Definition>(&self) -> bool {
+    /// If `resolvers` is empty: whether any files match isn't checked.
+    pub fn add<T: Definition>(&self, name: &'static str, resolvers: Vec<Box<dyn Resolve>>) -> bool {
         let mut kinds = self.0.write().unwrap_or_else(PoisonError::into_inner);
         if kinds.iter().any(|kind| kind.id == TypeId::of::<T>()) {
             return false;
         }
-        let resolvers = T::resolvers();
         assert!(
             !resolvers.is_empty(),
-            "{} claims no data files: say which with #[definition(file = \"..\")], `folder`, `extension` or `resolve`",
-            T::NAME,
+            "{name} claims no data files: say which with #[definition(file = \"..\")], `folder`, `extension` or `resolve`",
         );
         kinds.push(Kind {
             id: TypeId::of::<T>(),
-            name: T::NAME,
+            name,
             resolvers,
             deserialize: |deserializer| {
                 erased_serde::deserialize::<T>(deserializer)
                     .map(|def| Box::new(def) as Box<dyn Any + Send + Sync>)
             },
-            label: |def, names| {
-                def.downcast_ref::<T>()
-                    .map_or_else(String::new, |def| id::label::<T>(def.id(), names))
+            referenced: |world| {
+                let (Some(registry), Some(assets)) = (
+                    world.get_resource::<Registry<T>>(),
+                    world.get_resource::<Assets<DataFile>>(),
+                ) else {
+                    return Vec::new();
+                };
+                registry.referenced(assets)
             },
-            references: |def| {
-                let mut to = Referenced::default();
-                if let Some(def) = def.downcast_ref::<T>() {
-                    def.references(&mut to);
-                }
-                to.into_found()
-            },
-            contains: |world, hash| {
+            lookup: |world, hash| {
                 let id: &dyn Any = &Id::<T>::from_hash(hash);
                 let id = id.downcast_ref::<T::Id>()?;
-                Some(
-                    world
-                        .get_resource::<Registry<T>>()
-                        .is_some_and(|registry| registry.has(id)),
-                )
+                let registry = world.get_resource::<Registry<T>>()?;
+                Some((
+                    registry.target(id),
+                    registry.name(id).map(ToOwned::to_owned),
+                ))
             },
         });
         true
@@ -453,10 +434,16 @@ mod tests {
         name: String,
     }
 
+    /// Adds kind `T` to `kinds`, as registering it does.
+    fn add<T: Definition>(kinds: &Kinds) -> bool {
+        let info = T::info();
+        kinds.add::<T>(info.name, info.resolvers)
+    }
+
     fn kinds() -> Kinds {
         let kinds = Kinds::default();
-        kinds.add::<Tag>();
-        kinds.add::<Item>();
+        add::<Tag>(&kinds);
+        add::<Item>(&kinds);
         kinds
     }
 
@@ -538,7 +525,7 @@ mod tests {
             id: u32,
         }
         let kinds = kinds();
-        assert!(kinds.add::<Other>(), "registering it doesn't panic");
+        assert!(add::<Other>(&kinds), "registering it doesn't panic");
         let kinds = kinds.0.read().unwrap();
         let error =
             super::parse(&Ron::default(), Path::new("tags.ron"), b"[]", &kinds).unwrap_err();

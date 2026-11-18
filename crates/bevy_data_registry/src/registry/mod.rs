@@ -8,17 +8,26 @@ mod families;
 use std::sync::Arc;
 
 use bevy::asset::AssetPath;
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 pub use self::definitions::Definitions;
-use crate::Definition;
 use crate::file::DataFile;
+use crate::references::Reference;
+use crate::{Definition, Families, Referenced};
 
 /// Every definition of kind `T`, by id, as last indexed; read it through
 /// [`Definitions`].
 #[derive(Resource)]
 pub struct Registry<T: Definition> {
+    /// The kind's name, in messages.
+    name: &'static str,
+    /// How its definitions build on others, if they do.
+    families: Option<Families<T>>,
+    /// How to find the references in one of its definitions.
+    references: fn(&T, &mut Referenced),
+    /// The ids of its families, as last indexed.
+    family_ids: HashSet<T::Id>,
     /// Where each id is first, families included.
     locations: HashMap<T::Id, Location>,
     /// What's read: the first of each id, whole; not the families, nor
@@ -29,6 +38,30 @@ pub struct Registry<T: Definition> {
     /// The names of the kind's [`Id`](crate::Id)s, by hash, as read in
     /// any file: its own and references to it.
     names: HashMap<u64, Box<str>>,
+}
+
+/// What an id names, to a reference: whether it's somewhere
+/// [`Definitions::get`] finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Target {
+    /// A definition [`Definitions::get`] finds.
+    Read,
+    /// A family: only built on, never read.
+    Family,
+    /// One whose bases don't resolve: an error already.
+    Unresolved,
+    /// Nothing.
+    Missing,
+}
+
+/// The references in one definition: its id by name, where it is, and
+/// every [`Id`](crate::Id) in it but its own and its base.
+pub(crate) struct Referencing {
+    pub id: String,
+    pub path: AssetPath<'static>,
+    /// Its file, for the names its references were read from.
+    pub file: AssetId<DataFile>,
+    pub references: Vec<Reference>,
 }
 
 /// Where a definition is: its file, and its position in it.
@@ -50,9 +83,19 @@ impl Location {
     }
 }
 
-impl<T: Definition> Default for Registry<T> {
-    fn default() -> Self {
+impl<T: Definition> Registry<T> {
+    /// An empty registry of the kind named `name`, its definitions building
+    /// on others as `families` says.
+    pub(crate) fn new(
+        name: &'static str,
+        families: Option<Families<T>>,
+        references: fn(&T, &mut Referenced),
+    ) -> Self {
         Self {
+            name,
+            families,
+            references,
+            family_ids: HashSet::default(),
             locations: HashMap::default(),
             defs: HashMap::default(),
             names: HashMap::default(),
@@ -61,10 +104,42 @@ impl<T: Definition> Default for Registry<T> {
 }
 
 impl<T: Definition> Registry<T> {
-    /// Whether a definition has this id, families and those not read
-    /// included: whether a reference to it names one.
-    pub(crate) fn has(&self, id: &T::Id) -> bool {
-        self.locations.contains_key(id)
+    /// What `id` names, to a reference to it.
+    pub(crate) fn target(&self, id: &T::Id) -> Target {
+        if self.defs.contains_key(id) {
+            return Target::Read;
+        }
+        if self.family_ids.contains(id) {
+            Target::Family
+        } else if self.locations.contains_key(id) {
+            // Kept, but its bases don't resolve.
+            Target::Unresolved
+        } else {
+            Target::Missing
+        }
+    }
+
+    /// The references in every definition: what [`Definitions::get`] gives
+    /// (whole, or kept from before a reload), and the rest as written in
+    /// `assets`.
+    pub(crate) fn referenced(&self, assets: &Assets<DataFile>) -> Vec<Referencing> {
+        self.locations
+            .iter()
+            .filter_map(|(id, location)| {
+                let def = match self.defs.get(id) {
+                    Some(def) => &**def,
+                    None => assets.get(location.file)?.get::<T>(location.at)?,
+                };
+                let mut to = Referenced::default();
+                (self.references)(def, &mut to);
+                Some(Referencing {
+                    id: self.label(id),
+                    path: location.path.clone(),
+                    file: location.file,
+                    references: to.into_found(),
+                })
+            })
+            .collect()
     }
 
     /// The name `id` was read from, if it's an [`Id`](crate::Id) and was.
@@ -90,7 +165,7 @@ impl<T: Definition> Registry<T> {
                 match self.names.get(&hash) {
                     Some(kept) if **kept != *name => errors.push(format!(
                         "{} ids `{kept}` and `{name}` have the same hash ({hash:#018x}): rename one",
-                        T::NAME
+                        self.name
                     )),
                     Some(_) => {}
                     None => {
@@ -137,7 +212,7 @@ impl<T: Definition> Registry<T> {
                 let (earlier, earlier_file, _) = &located[earlier];
                 errors.push(format!(
                     "duplicate {} id `{}` in {} and {}",
-                    T::NAME,
+                    self.name,
                     self.label(def.id()),
                     earlier.describe(earlier_file),
                     location.describe(file),
@@ -158,17 +233,25 @@ impl<T: Definition> Registry<T> {
 
         let defs: Vec<&T> = kept.iter().map(|&index| located[index].2).collect();
         let label = |id: &T::Id| self.label(id);
-        let (mut whole, family_errors) = families::resolve(&defs, &label);
-        errors.extend(family_errors);
+        let mut whole = HashMap::default();
+        if let Some(families) = &self.families {
+            let (made, family_errors) = families::resolve(&defs, families, self.name, &label);
+            whole = made;
+            errors.extend(family_errors);
+        }
+        let is_family = |def: &T| self.families.is_some_and(|f| (f.is_family)(def));
+        let base = |def: &T| self.families.and_then(|f| (f.base)(def)).is_some();
         // What was read before: a definition whose bases stop resolving on
         // a reload stays as it last was, rather than vanishing mid-game.
         let previous = core::mem::take(&mut self.defs);
+        self.family_ids.clear();
         for &index in &kept {
             let (location, file, def) = &located[index];
-            if def.is_family() {
+            if is_family(def) {
+                self.family_ids.insert(def.id().clone());
                 continue;
             }
-            let read = if def.base().is_some() {
+            let read = if base(def) {
                 // Not there if its bases don't resolve: as it last was, if
                 // it was.
                 whole
@@ -202,11 +285,15 @@ mod tests {
         #[definition(family)]
         family: bool,
         weight: Option<u32>,
+        /// A reference, taken from the base if it has none.
+        #[serde(default)]
+        near: Option<crate::Id<Thing>>,
     }
 
     impl Inherit for Thing {
         fn inherit(&mut self, base: &Self) {
             self.weight = self.weight.or(base.weight);
+            self.near = self.near.or(base.near);
         }
     }
 
@@ -216,12 +303,19 @@ mod tests {
             base: base.map(str::to_owned),
             family,
             weight,
+            near: None,
         }
+    }
+
+    /// An empty registry of kind `T`, as registering it makes.
+    fn registry<T: Definition>() -> Registry<T> {
+        let info = T::info();
+        Registry::new(info.name, info.families, info.references)
     }
 
     /// `files`, indexed in order, each at `<n>.ron`.
     fn index(files: Vec<Vec<Thing>>) -> (Registry<Thing>, Vec<String>) {
-        let mut registry = Registry::default();
+        let mut registry = registry::<Thing>();
         let errors = reindex(&mut registry, files);
         (registry, errors)
     }
@@ -317,13 +411,52 @@ mod tests {
                 (assets.add(file).id(), AssetPath::from(format!("{n}.ron")))
             })
             .collect();
-        let mut registry = Registry::<Item>::default();
+        let mut registry = registry::<Item>();
         let errors = registry.index(&files, &assets);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(
             errors[0].contains("Item ids `sword` and `axe` have the same hash"),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn references_are_read_from_what_get_gives() {
+        let mut rocks = thing("rocks", None, true, Some(5));
+        rocks.near = Some(crate::Id::from_name("cliff"));
+        let (mut registry, _) = index(vec![vec![
+            rocks,
+            thing("pebble", Some("rocks"), false, None),
+        ]]);
+        // `pebble`'s base is gone: it's kept as it was, `near` inherited.
+        let mut assets = Assets::<DataFile>::default();
+        let file = assets.add(DataFile::of_defs(vec![thing(
+            "pebble",
+            Some("rock"),
+            false,
+            Some(1),
+        )]));
+        let files = [(file.id(), AssetPath::from("0.ron"))];
+        registry.index(&files, &assets);
+        let referenced = registry.referenced(&assets);
+        let pebble = referenced
+            .iter()
+            .find(|from| from.id == "pebble")
+            .expect("kept");
+        assert_eq!(pebble.references.len(), 1, "its kept `near`");
+        assert_eq!(pebble.references[0].field, "near");
+        assert_eq!(registry.target(&"pebble".to_owned()), Target::Read);
+        assert_eq!(registry.target(&"nothing".to_owned()), Target::Missing);
+    }
+
+    #[test]
+    fn a_family_is_a_target_of_its_own() {
+        let (registry, _) = index(vec![vec![
+            thing("rocks", None, true, Some(5)),
+            thing("orphan", Some("nobody"), false, None),
+        ]]);
+        assert_eq!(registry.target(&"rocks".to_owned()), Target::Family);
+        assert_eq!(registry.target(&"orphan".to_owned()), Target::Unresolved);
     }
 
     #[test]

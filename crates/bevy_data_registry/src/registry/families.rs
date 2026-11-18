@@ -4,16 +4,18 @@
 
 use bevy::platform::collections::{HashMap, HashSet};
 
-use crate::Definition;
+use crate::{Definition, Families};
 
-/// Every definition of `defs` that builds on another, made whole: its
-/// bases' (each whole first) merged into it, by id; and what's wrong: a
-/// base that isn't there, bases that come round to themselves. What builds
-/// on nothing isn't in it: it's whole as written. Of an id used twice,
-/// only the first counts, as the registry keeps. Ids are shown in
-/// messages by `label`.
+/// Every definition of `defs` that builds on another, as `families` says,
+/// made whole: its bases' (each whole first) merged into it, by id; and
+/// what's wrong: a base that isn't there, bases that come round to
+/// themselves. What builds on nothing isn't in it: it's whole as written.
+/// Of an id used twice, only the first counts, as the registry keeps. The
+/// kind is `name`, and ids are shown in messages by `label`.
 pub(crate) fn resolve<T: Definition>(
     defs: &[&T],
+    families: &Families<T>,
+    name: &str,
     label: &dyn Fn(&T::Id) -> String,
 ) -> (HashMap<T::Id, T>, Vec<String>) {
     let mut by_id: HashMap<&T::Id, &T> = HashMap::default();
@@ -28,10 +30,10 @@ pub(crate) fn resolve<T: Definition>(
             .get(def.id())
             .is_some_and(|first| core::ptr::eq(*first, def));
         if first
-            && def.base().is_some()
-            && let Err(error) = make(def, &by_id, &mut whole, &mut failed, label)
+            && (families.base)(def).is_some()
+            && let Err(error) = make(def, families, &by_id, &mut whole, &mut failed, label)
         {
-            errors.push(format!("{} `{}`: {error}", T::NAME, label(def.id())));
+            errors.push(format!("{name} `{}`: {error}", label(def.id())));
         }
     }
     (whole, errors)
@@ -44,6 +46,7 @@ pub(crate) fn resolve<T: Definition>(
 /// walked once however many build on it.
 fn make<'a, T: Definition>(
     def: &'a T,
+    families: &Families<T>,
     by_id: &HashMap<&T::Id, &'a T>,
     whole: &mut HashMap<T::Id, T>,
     failed: &mut HashMap<&'a T::Id, String>,
@@ -51,38 +54,33 @@ fn make<'a, T: Definition>(
 ) -> Result<(), String> {
     // Those to make whole, `def` first, each building on the next.
     let mut chain: Vec<&'a T> = Vec::new();
-    let result = walk(def, by_id, whole, failed, &mut chain, label).and_then(|()| {
-        // Top down, so each base is whole before what builds on it.
-        while let Some(def) = chain.pop() {
-            let Some(base_id) = def.base() else {
-                continue;
-            };
-            // Its base whole, if it builds on one itself; as written if not.
-            let base = whole.get(base_id).or_else(|| by_id.get(base_id).copied());
-            let Some(filled) = base.and_then(|base| def.inherit(base)) else {
-                chain.push(def);
-                return Err(format!(
-                    "builds on `{}`, but {} has no families",
-                    label(base_id),
-                    T::NAME
-                ));
-            };
-            whole.insert(def.id().clone(), filled);
-        }
-        Ok(())
-    });
+    let result = walk(def, families, by_id, whole, failed, &mut chain, label);
     if let Err(error) = &result {
         for def in chain {
             failed.insert(def.id(), error.clone());
         }
+        return result;
     }
-    result
+    // Top down, so each base is whole before what builds on it: every base
+    // is there, as the walk found.
+    while let Some(def) = chain.pop() {
+        let Some(base_id) = (families.base)(def) else {
+            continue;
+        };
+        let base = whole.get(base_id).or_else(|| by_id.get(base_id).copied());
+        if let Some(base) = base {
+            let filled = (families.inherit)(def, base);
+            whole.insert(def.id().clone(), filled);
+        }
+    }
+    Ok(())
 }
 
 /// Walks up from `def` into `chain` while what it reaches builds on
 /// something and isn't whole yet.
 fn walk<'a, T: Definition>(
     def: &'a T,
+    families: &Families<T>,
     by_id: &HashMap<&T::Id, &'a T>,
     whole: &HashMap<T::Id, T>,
     failed: &HashMap<&'a T::Id, String>,
@@ -91,7 +89,7 @@ fn walk<'a, T: Definition>(
 ) -> Result<(), String> {
     let mut seen: HashSet<&T::Id> = HashSet::default();
     let mut current = def;
-    while let Some(base_id) = current.base() {
+    while let Some(base_id) = (families.base)(current) {
         #[cfg(test)]
         tests::STEPS.with(|steps| steps.set(steps.get() + 1));
         if whole.contains_key(current.id()) {
@@ -135,6 +133,11 @@ pub(super) mod tests {
         value: Option<u32>,
     }
 
+    /// Thing's families, as derived.
+    fn families() -> Families<Thing> {
+        Thing::info().families.expect("it has a base")
+    }
+
     impl Inherit for Thing {
         fn inherit(&mut self, base: &Self) {
             self.value = self.value.or(base.value);
@@ -161,7 +164,7 @@ pub(super) mod tests {
             thing("b", Some("a"), None),
         ];
         let refs: Vec<&Thing> = things.iter().collect();
-        let (whole, errors) = resolve(&refs, &String::clone);
+        let (whole, errors) = resolve(&refs, &families(), "Thing", &String::clone);
         assert_eq!(whole["child"].value, Some(7), "through its parent");
         assert_eq!(whole["own"].value, Some(3), "its own wins");
         assert!(!whole.contains_key("grandparent"), "whole as written");
@@ -182,7 +185,7 @@ pub(super) mod tests {
         // The deepest first: made whole from it, through every base.
         things.reverse();
         let refs: Vec<&Thing> = things.iter().collect();
-        let (whole, errors) = resolve(&refs, &String::clone);
+        let (whole, errors) = resolve(&refs, &families(), "Thing", &String::clone);
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(whole[&(LONG - 1).to_string()].value, Some(9));
         assert_eq!(whole.len(), LONG - 1);
@@ -203,7 +206,7 @@ pub(super) mod tests {
         things.reverse();
         let refs: Vec<&Thing> = things.iter().collect();
         STEPS.with(|steps| steps.set(0));
-        let (whole, errors) = resolve(&refs, &String::clone);
+        let (whole, errors) = resolve(&refs, &families(), "Thing", &String::clone);
         assert!(whole.is_empty());
         assert_eq!(errors.len(), LONG, "each says why");
         assert!(errors.iter().all(|error| error.contains("`nobody`")));
@@ -220,7 +223,10 @@ pub(super) mod tests {
             thing("child", Some("base"), None),
         ];
         let refs: Vec<&Thing> = things.iter().collect();
-        assert_eq!(resolve(&refs, &String::clone).0["child"].value, Some(1));
+        assert_eq!(
+            resolve(&refs, &families(), "Thing", &String::clone).0["child"].value,
+            Some(1)
+        );
     }
 
     #[test]
@@ -232,7 +238,7 @@ pub(super) mod tests {
             thing("x", Some("nobody"), None),
         ];
         let refs: Vec<&Thing> = things.iter().collect();
-        let (whole, errors) = resolve(&refs, &String::clone);
+        let (whole, errors) = resolve(&refs, &families(), "Thing", &String::clone);
         assert!(!whole.contains_key("x"), "the first is whole as written");
         assert_eq!(
             errors,

@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `formats`; `..default()`), `app.register_definition::<T>()` for every
   kind, `Definitions<T>` (was `Defs<T>`) looked up by borrowed ids, a
   `prelude`. `FamilyDefinition` became `Inherit`, with the base and family
-  fields marked for the derive.
+  fields marked for the derive. `Definition` is its id and `info()`, a
+  `DefinitionInfo`: the kind's name, files, references and `Families`.
 
 ### Removed
 

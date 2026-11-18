@@ -21,7 +21,7 @@ use bevy::prelude::*;
 pub use bevy_data_registry_macros::{Definition, References};
 
 pub use crate::app::DataApp;
-pub use crate::definition::{Definition, Inherit};
+pub use crate::definition::{Definition, DefinitionInfo, Families, Inherit};
 use crate::file::{DataFile, DataLoader, Kinds};
 use crate::format::{DataFormat, Ron};
 pub use crate::id::Id;
@@ -66,7 +66,10 @@ pub struct DataRegistryPlugin {
     ///
     /// - every file in it must be one some asset loader reads: Bevy fails the
     ///   folder over one none does (`notes.txt`); one another loader reads is
-    ///   skipped, with a warning;
+    ///   skipped, with a warning; so is one whose `.meta` names a loader the
+    ///   app doesn't have, without one;
+    /// - with `dev`, a file no data format reads, added with a malformed
+    ///   `.meta`, fails the folder's reload until the folder changes again;
     /// - on first load, a file that fails to load fails the folder before the
     ///   files after it are tried, so broken files are reported one at a time;
     /// - with `dev`, a folder in it deleted or moved out while the app runs

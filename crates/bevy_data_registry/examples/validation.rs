@@ -1,4 +1,5 @@
-//! Checks across definitions: every `Id` read is checked to name a
+//! Checks across definitions: every `Id` in a definition, but its own, its
+//! base and fields marked `#[definition(unchecked)]`, is checked to name a
 //! definition by the crate, and a system of the app's own in
 //! `DataSystems::Validate` pushes what else is wrong to `DataErrors`. On
 //! first load any error fails loading: logged, `DataState::Failed`, and the

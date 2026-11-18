@@ -20,6 +20,10 @@ pub(crate) struct DataFolder {
     /// loaded: held, so Bevy reloads each when it's saved again (or its
     /// `.meta`). The folder is asked for again once one loads.
     broken: Vec<(AssetPath<'static>, Handle<DataFile>)>,
+    /// Files held as broken that have loaded since, indexed as they are
+    /// until a listing has them: one from a scan begun before they failed
+    /// can leave them out, and the folder then isn't scanned again.
+    recovered: Vec<(AssetPath<'static>, Handle<DataFile>)>,
     /// Whether it's been listed again on first load, as something went
     /// missing: only once, so what always is fails loading.
     relisted: bool,
@@ -31,6 +35,7 @@ impl DataFolder {
             path,
             handle: None,
             broken: Vec::new(),
+            recovered: Vec::new(),
             relisted: false,
         }
     }
@@ -160,14 +165,18 @@ pub(super) fn settle(
             .filter_map(|file| asset_server.get_path(file.id()))
             .collect();
         folder.broken.retain(|(path, _)| !listed.contains(path));
+        folder.recovered.retain(|(path, _)| !listed.contains(path));
     } else if fixed {
-        // The folder's reload failed: asking for it again reloads it.
-        folder
-            .broken
-            .retain(|(_, file)| !asset_server.is_loaded(file));
+        // The folder's reload failed: asking for it again reloads it, if
+        // it's failed still; and what loaded is indexed meanwhile.
+        let (loaded, broken): (Vec<_>, Vec<_>) = core::mem::take(&mut folder.broken)
+            .into_iter()
+            .partition(|(_, file)| asset_server.is_loaded(file));
+        folder.broken = broken;
+        folder.recovered.extend(loaded);
         folder.handle = Some(asset_server.load_folder(folder.path.clone()));
     }
-    let changed = files_changed || folder_changed || failed || folder_failed;
+    let changed = files_changed || folder_changed || failed || folder_failed || fixed;
 
     match state.get() {
         DataState::Loading if !progress.due => {}
@@ -197,9 +206,15 @@ pub(super) fn settle(
             let Some(listing) = folders.get(&handle) else {
                 return;
             };
-            let Some(settled) = list(&asset_server, listing, &mut errors) else {
+            let Some(mut settled) = list(&asset_server, listing, &mut errors) else {
                 return;
             };
+            for (path, file) in &folder.recovered {
+                if !settled.iter().any(|(_, listed)| listed == path) {
+                    settled.push((file.id(), path.clone()));
+                }
+            }
+            settled.sort_by(|(_, a), (_, b)| a.path().cmp(b.path()));
             files.0 = settled;
         }
     }

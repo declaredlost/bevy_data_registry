@@ -18,8 +18,8 @@ use bevy::state::app::StatesPlugin;
 pub use self::finish::DataReloaded;
 pub(crate) use self::load::DataFolder;
 use self::load::{DataFiles, Progress};
-use crate::Definition;
 use crate::registry::Registry;
+use crate::{Definition, Families, Referenced};
 
 /// Where loading the definitions is: still loading, loaded, or failed.
 #[derive(States, Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -153,7 +153,12 @@ pub(crate) fn build(app: &mut App, path: AssetPath<'static>) {
 }
 
 /// Adds kind `T`'s registry, and indexing it.
-pub(crate) fn add_kind<T: Definition>(app: &mut App) {
-    app.init_resource::<Registry<T>>()
+pub(crate) fn add_kind<T: Definition>(
+    app: &mut App,
+    name: &'static str,
+    families: Option<Families<T>>,
+    references: fn(&T, &mut Referenced),
+) {
+    app.insert_resource(Registry::<T>::new(name, families, references))
         .add_systems(Update, index::index_kind::<T>.in_set(Step::Index));
 }

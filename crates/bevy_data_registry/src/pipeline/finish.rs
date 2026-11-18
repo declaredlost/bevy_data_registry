@@ -9,6 +9,8 @@ use super::{DataErrors, DataState};
 ///
 /// A file changed, was added or was removed while the app runs (with
 /// `dev`): whatever was built from the definitions should be built again.
+/// It marks the end of the pass, not that it passed: what was wrong was
+/// logged, and the definitions read as indexed.
 /// Read it in `PostUpdate`, after the pipeline in `Update`: read in
 /// `Update`, it may be read a frame late, as the next reload starts.
 #[derive(Message, Debug, Clone, Copy)]

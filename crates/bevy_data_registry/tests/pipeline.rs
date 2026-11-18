@@ -34,6 +34,9 @@ struct Thing {
     /// Checked through `Find`.
     #[serde(default)]
     finds: Vec<Find>,
+    /// Another thing it's like: checked to be one `get` finds.
+    #[serde(default)]
+    like: Option<Id<Thing>>,
 }
 
 /// What's found in a thing: a type of the app's own holding an `Id`.
@@ -155,6 +158,8 @@ fn definitions_load_index_and_come_whole(app: &mut TestApp) {
         };
         assert_eq!(weight("pebble"), Some(1));
         assert_eq!(weight("boulder"), Some(5), "from its family");
+        let boulder = things.get(&Id::from_name("boulder")).expect("loaded");
+        assert_eq!(boulder.like, Some(Id::from_name("pebble")));
         assert_eq!(weight("flint"), Some(2), "its own, alone in its file");
         assert_eq!(weight("slate"), Some(5), "from a file named for it");
         assert_eq!(weight("gravel"), Some(1), "in a folder named as a file");
@@ -195,6 +200,12 @@ const ROCKS: Id<Thing> = Id::from_name("rocks");
 
 #[bevy_harness::test(setup = loading("dangling"), timeout = 10)]
 fn a_reference_to_what_isnt_there_fails_loading(app: &mut TestApp) {
+    wait(app, "loading ends", |app| state(app) != DataState::Loading);
+    assert_eq!(state(app), DataState::Failed);
+}
+
+#[bevy_harness::test(setup = loading("like_a_family"), timeout = 10)]
+fn a_reference_to_a_family_fails_loading(app: &mut TestApp) {
     wait(app, "loading ends", |app| state(app) != DataState::Loading);
     assert_eq!(state(app), DataState::Failed);
 }

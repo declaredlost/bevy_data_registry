@@ -4,7 +4,10 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::visit::Visit;
-use syn::{Data, DeriveInput, Error, Field, Fields, Generics, Ident, LitStr, Member, Path, Result};
+use syn::{
+    Data, DeriveInput, Error, Field, Fields, Generics, Ident, LitStr, Member, Path, Result,
+    WherePredicate, parse_quote,
+};
 
 /// Whether `field` is marked `#[definition(unchecked)]`: its `Id`s aren't
 /// checked. `others` says what else the field's `#[definition(..)]` may
@@ -34,25 +37,41 @@ pub(crate) fn unchecked(field: &Field, others: &[&str]) -> Result<bool> {
 
 /// Visits the `Id`s of `value`, a field named `name` (for messages) of type
 /// `ty`: if its type is `References`, and skipped if not. A type naming one
-/// of `generics`' parameters is skipped: whether it's `References` isn't
-/// known where it's walked.
+/// of `generics`' parameters is visited, and bound to be `References` by
+/// the predicate returned, as whether it is can't be known otherwise.
 pub(crate) fn walk(
     krate: &TokenStream,
     name: &str,
     value: &TokenStream,
     ty: &syn::Type,
     generics: &Generics,
-) -> Option<TokenStream> {
+) -> (TokenStream, Option<WherePredicate>) {
     if names_a_parameter(ty, generics) {
-        return None;
+        let walk = quote! {
+            to.enter(#name);
+            #krate::References::visit_references(#value, to);
+            to.leave();
+        };
+        return (walk, Some(parse_quote!(#ty: #krate::References)));
     }
-    Some(quote! {
-        to.field(#name);
+    let walk = quote! {
+        to.enter(#name);
         // Autoref picks `ViaReferences` if the field's type is
         // `References`, `ViaNothing` if not.
         #[allow(clippy::needless_borrow)]
         (&&#krate::__private::Walk(#value)).walk(to);
-    })
+        to.leave();
+    };
+    (walk, None)
+}
+
+/// `generics`, bound by `bounds` too.
+pub(crate) fn bound(generics: &Generics, bounds: Vec<WherePredicate>) -> Generics {
+    let mut generics = generics.clone();
+    if !bounds.is_empty() {
+        generics.make_where_clause().predicates.extend(bounds);
+    }
+    generics
 }
 
 /// The `use` that walking needs in scope.
@@ -117,16 +136,21 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
     let krate = krate(input)?;
     let name = &input.ident;
     let generics = &input.generics;
+    let mut bounds = Vec::new();
     let body = match &input.data {
         Data::Struct(data) => {
             let walks = fields(
                 &krate,
                 &data.fields,
                 generics,
+                &mut bounds,
                 |member| quote!(&self.#member),
             )?;
             quote!(#(#walks)*)
         }
+        // No value to visit: matched on what it points to, as `self`
+        // itself, a reference, would need an arm.
+        Data::Enum(data) if data.variants.is_empty() => quote!(match *self {}),
         Data::Enum(data) => {
             let mut arms = Vec::new();
             for variant in &data.variants {
@@ -140,7 +164,7 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
                 } else {
                     quote!(Self::#variant_name { #(#members: #bindings),* })
                 };
-                let walks = fields(&krate, &variant.fields, generics, |member| {
+                let walks = fields(&krate, &variant.fields, generics, &mut bounds, |member| {
                     let at = match member {
                         Member::Named(_) => variant
                             .fields
@@ -169,6 +193,7 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
         }
     };
     let walking = walking(&krate);
+    let generics = bound(generics, bounds);
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
     Ok(quote! {
         impl #impl_generics #krate::References for #name #type_generics #where_clause {
@@ -186,6 +211,7 @@ fn fields(
     krate: &TokenStream,
     fields: &Fields,
     generics: &Generics,
+    bounds: &mut Vec<WherePredicate>,
     access: impl Fn(&Member) -> TokenStream,
 ) -> Result<Vec<TokenStream>> {
     let mut walks = Vec::new();
@@ -198,7 +224,9 @@ fn fields(
             Member::Unnamed(index) => index.index.to_string(),
         };
         let name = name.strip_prefix("r#").unwrap_or(&name).to_owned();
-        walks.extend(walk(krate, &name, &access(&member), &field.ty, generics));
+        let (walk, bound) = walk(krate, &name, &access(&member), &field.ty, generics);
+        walks.push(walk);
+        bounds.extend(bound);
     }
     Ok(walks)
 }
@@ -221,8 +249,8 @@ mod tests {
         })
         .unwrap()
         .to_string();
-        assert!(walked.contains(r#"to . field ("item")"#), "{walked}");
-        assert!(walked.contains(r#"to . field ("chance")"#), "{walked}");
+        assert!(walked.contains(r#"to . enter ("item")"#), "{walked}");
+        assert!(walked.contains(r#"to . enter ("chance")"#), "{walked}");
         assert!(!walked.contains(r#""maybe""#), "{walked}");
         assert!(walked.contains(":: bevy_data_registry :: References for Drop"));
     }
@@ -247,14 +275,27 @@ mod tests {
     }
 
     #[test]
-    fn a_field_of_a_parameters_type_is_skipped() {
+    fn a_field_of_a_parameters_type_is_walked_and_bound() {
         let walked = expand(&parse_quote! {
-            struct Wrapper<T> { inner: T, items: Vec<Id<Item>> }
+            struct Drop<T: 'static> { item: Id<T>, items: Vec<Id<Item>> }
         })
         .unwrap()
         .to_string();
-        assert!(!walked.contains(r#""inner""#), "{walked}");
+        assert!(
+            walked.contains("References :: visit_references (& self . item , to)"),
+            "{walked}"
+        );
+        assert!(
+            walked.contains("where Id < T > : :: bevy_data_registry :: References"),
+            "{walked}"
+        );
         assert!(walked.contains(r#""items""#), "{walked}");
+    }
+
+    #[test]
+    fn an_enum_with_no_variants_visits_nothing() {
+        let walked = expand(&parse_quote! { enum Never {} }).unwrap().to_string();
+        assert!(walked.contains("match * self { }"), "{walked}");
     }
 
     #[test]

@@ -36,10 +36,14 @@ use serde::{Deserialize, Deserializer};
 /// let pelt = items.get(&PELT);
 /// ```
 ///
-/// Every `Id` in a definition but its own is checked once every kind is
-/// indexed: one naming no definition of its kind is an error, as one of
-/// [`DataSystems::Validate`](crate::DataSystems::Validate). Two names of a
-/// kind with the same hash are an error too: one needs renaming.
+/// Every `Id` in a definition, but its own, its base and those in fields
+/// marked `#[definition(unchecked)]`, is checked once every kind is
+/// indexed, as one of [`DataSystems::Validate`](crate::DataSystems::Validate):
+/// it must name a definition [`Definitions::get`](crate::Definitions::get)
+/// finds, not nothing and not a family (families are only built on). What's
+/// checked is what `get` gives: whole, or kept from before a reload. Two
+/// names of a kind with the same hash are an error too: one needs
+/// renaming.
 ///
 /// A kind's own id field, if it's an `Id`, must be one of the kind: the
 /// derive checks it, by the type as written (`Id<..>`). Another type named
@@ -167,16 +171,6 @@ impl<T: 'static> Visitor<'_> for Named<T> {
             }
         });
         Ok(id)
-    }
-}
-
-/// A definition's id of kind `T`, for messages: by the name it was read
-/// from in `names` if it's an [`Id`], as it shows if not.
-pub(crate) fn label<T: crate::Definition>(id: &T::Id, names: &Names) -> String {
-    let as_id: &dyn core::any::Any = id;
-    match as_id.downcast_ref::<Id<T>>() {
-        Some(id) => names.show(TypeId::of::<T>(), id.hash),
-        None => id.to_string(),
     }
 }
 
