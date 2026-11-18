@@ -225,6 +225,25 @@ fn scratch(watch: bool, fill: impl FnOnce(&std::path::Path)) -> TestApp {
     app
 }
 
+fn a_note() -> TestApp {
+    scratch(false, |data| {
+        std::fs::write(data.join("notes.txt"), "not data").unwrap();
+    })
+}
+
+/// Bevy's `load_folder` fails over a file no loader reads: see the README.
+#[bevy_harness::test(setup = a_note(), timeout = 10)]
+fn a_file_no_loader_reads_fails_loading(app: &mut TestApp) {
+    wait(app, "loading ends", |app| state(app) != DataState::Loading);
+    assert_eq!(state(app), DataState::Failed);
+}
+
+#[bevy_harness::test(setup = loading("nowhere"), timeout = 10)]
+fn a_missing_data_folder_fails_loading(app: &mut TestApp) {
+    wait(app, "loading ends", |app| state(app) != DataState::Loading);
+    assert_eq!(state(app), DataState::Failed);
+}
+
 #[cfg(unix)]
 fn a_broken_link() -> TestApp {
     scratch(false, |data| {
@@ -279,15 +298,18 @@ mod hot_reload {
         // Saved half-written, as an editor would: the folder's reload fails.
         let new = data(app, "new.tags.ron");
         std::fs::write(&new, "[(id: ").unwrap();
-        let mut reported = false;
         wait(app, "the folder's failed reload is reported", |app| {
-            reported |= !app.read::<DataReloaded>().is_empty();
-            reported && folder_failed(app)
+            let reported = !app.read::<DataReloaded>().is_empty();
+            let failed = folder_failed(app);
+            assert!(!reported || failed, "reported before the folder failed");
+            reported
         });
         assert!(has(app, "old"), "what was loaded is kept");
         // Fixed in place.
         std::fs::write(&new, r#"[(id: "new")]"#).unwrap();
-        wait(app, "the fixed file loads", |app| has(app, "new"));
+        wait(app, "the fixed file loads, and that's reported", |app| {
+            !app.read::<DataReloaded>().is_empty() && has(app, "new")
+        });
         assert!(has(app, "old"));
         assert_eq!(state(app), DataState::Loaded);
     }

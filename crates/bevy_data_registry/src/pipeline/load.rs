@@ -16,12 +16,12 @@ use crate::file::{DataFile, in_data};
 pub(crate) struct DataFolder {
     pub path: AssetPath<'static>,
     handle: Option<Handle<LoadedFolder>>,
-    /// Files that failed to load as they were added, once loaded: held, so
-    /// Bevy reloads each when it's saved again. The folder's reload failed
-    /// with them, and is asked for again once one loads.
+    /// Files that failed the folder's reload as they were added, once
+    /// loaded: held, so Bevy reloads each when it's saved again (or its
+    /// `.meta`). The folder is asked for again once one loads.
     broken: Vec<(AssetPath<'static>, Handle<DataFile>)>,
-    /// Whether it's been listed again on first load, as a file went
-    /// missing: only once, so one that always is fails loading.
+    /// Whether it's been listed again on first load, as something went
+    /// missing: only once, so what always is fails loading.
     relisted: bool,
 }
 
@@ -40,12 +40,13 @@ impl DataFolder {
         in_data(&self.path, path).is_some()
     }
 
-    /// Whether `missing`, as the asset reader names it, is the folder
-    /// itself rather than a file in it. The folder at the source's root has
-    /// no name to tell it by: what's missing is then taken for a file.
-    fn is_itself(&self, missing: &Path) -> bool {
-        let own = self.path.path();
-        !own.as_os_str().is_empty() && missing.ends_with(own)
+    /// Holds `path`, a file that failed the folder's reload, until it's
+    /// fixed: unless it's not in the folder, or already held.
+    fn hold(&mut self, asset_server: &AssetServer, path: &AssetPath<'static>) {
+        if self.holds(path) && !self.broken.iter().any(|(held, _)| held == path) {
+            let file = asset_server.load(path.clone());
+            self.broken.push((path.clone(), file));
+        }
     }
 }
 
@@ -130,19 +131,9 @@ pub(super) fn settle(
             _ => {}
         }
     }
-    let mut failed = false;
-    for failure in failures.read() {
-        if ours(failure.id) {
-            failed = true;
-        } else if loaded
-            && folder.holds(&failure.path)
-            && !folder.broken.iter().any(|(path, _)| *path == failure.path)
-        {
-            // Added, and failing the folder's reload with it.
-            let file = asset_server.load(failure.path.clone());
-            folder.broken.push((failure.path.clone(), file));
-        }
-    }
+    let failed = failures
+        .read()
+        .fold(false, |any, failure| any | ours(failure.id));
     // Every message read, not up to the first that counts: one left unread
     // would be taken for another change next frame.
     let folder_changed = folder_events
@@ -151,11 +142,29 @@ pub(super) fn settle(
     let folder_failed = folder_failures
         .read()
         .fold(false, |any, failure| any | (failure.id == handle.id()));
+    if loaded
+        && folder_failed
+        && let LoadState::Failed(error) = asset_server.load_state(&handle)
+        && let Some(path) = failing_file(&error)
+    {
+        // Added, or changed, and failing the folder's reload with it.
+        folder.hold(&asset_server, &path);
+    }
     if folder_changed {
-        folder.broken.clear();
+        // Those the new listing has are fixed; the rest may have failed
+        // after it started, so are held still.
+        let listed: Vec<AssetPath> = folders
+            .get(&handle)
+            .into_iter()
+            .flat_map(|listing| &listing.handles)
+            .filter_map(|file| asset_server.get_path(file.id()))
+            .collect();
+        folder.broken.retain(|(path, _)| !listed.contains(path));
     } else if fixed {
         // The folder's reload failed: asking for it again reloads it.
-        folder.broken.clear();
+        folder
+            .broken
+            .retain(|(_, file)| !asset_server.is_loaded(file));
         folder.handle = Some(asset_server.load_folder(folder.path.clone()));
     }
     let changed = files_changed || folder_changed || failed || folder_failed;
@@ -179,22 +188,8 @@ pub(super) fn settle(
             folder.path
         )),
         LoadState::Failed(error) => {
-            match missing(&error) {
-                Some(path) if folder.is_itself(path) => {
-                    warn!("data folder {} not found", folder.path);
-                }
-                // A file deleted between Bevy listing the folder and
-                // loading it: listing it again leaves the file out. Once:
-                // one listed but never there (a broken link) is an error.
-                Some(_) if !folder.relisted => {
-                    folder.relisted = true;
-                    folder.handle = Some(asset_server.load_folder(folder.path.clone()));
-                    return;
-                }
-                _ => errors.push(format!(
-                    "failed to load data folder {}: {error}",
-                    folder.path
-                )),
+            if first_load_failed(&asset_server, &mut folder, &error, &mut errors) {
+                return;
             }
             files.0.clear();
         }
@@ -210,6 +205,40 @@ pub(super) fn settle(
     }
     progress.dirty = false;
     progress.due = true;
+}
+
+/// Handles the folder failing to load on first load: lists it again (once)
+/// if something went missing, and returns whether it did; otherwise says
+/// why in `errors`.
+fn first_load_failed(
+    asset_server: &AssetServer,
+    folder: &mut DataFolder,
+    error: &AssetLoadError,
+    errors: &mut DataErrors,
+) -> bool {
+    match error {
+        // A file deleted between Bevy listing the folder and
+        // loading it: listing it again leaves the file out. Once:
+        // one listed but never there (a broken link), or the
+        // folder itself missing, is an error.
+        error if is_not_found(error) && !folder.relisted => {
+            folder.relisted = true;
+            folder.handle = Some(asset_server.load_folder(folder.path.clone()));
+            return true;
+        }
+        // Bevy's `load_folder` skips a file no loader reads by
+        // extension, but not this.
+        AssetLoadError::MissingAssetLoader { asset_path, .. } => errors.push(format!(
+            "{asset_path} is in data folder {}, but no asset loader reads it: move it \
+             out of the folder",
+            folder.path
+        )),
+        error => errors.push(format!(
+            "failed to load data folder {}: {error}",
+            folder.path
+        )),
+    }
+    false
 }
 
 /// Every data file of `folder`, by path; `None` while one is still
@@ -254,6 +283,16 @@ fn list(
 /// Whether a load failed because the file or folder isn't there.
 fn is_not_found(error: &AssetLoadError) -> bool {
     missing(error).is_some()
+}
+
+/// The file a folder's load failed on, if the error names one: one its
+/// loader failed on, or whose `.meta` is malformed.
+fn failing_file(error: &AssetLoadError) -> Option<AssetPath<'static>> {
+    match error {
+        AssetLoadError::AssetLoaderError(error) => Some(error.path().clone()),
+        AssetLoadError::DeserializeMeta { path, .. } => Some(path.clone()),
+        _ => None,
+    }
 }
 
 /// What a load found missing, as the asset reader names it: for files, the

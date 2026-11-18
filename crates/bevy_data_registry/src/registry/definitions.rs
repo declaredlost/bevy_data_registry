@@ -19,7 +19,8 @@ use crate::Definition;
 /// definition whose bases don't resolve; after a hot reload, one whose bases
 /// stopped resolving is read as it last was, the error logged. It's what
 /// was last indexed: a file changed on disk is read once it's indexed and
-/// validated again.
+/// validated again. A reload's validation errors are logged, not rolled
+/// back: what failed them is read.
 ///
 /// ```rust,ignore
 /// fn price(items: Definitions<Item>) {

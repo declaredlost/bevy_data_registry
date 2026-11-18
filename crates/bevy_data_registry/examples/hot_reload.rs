@@ -33,7 +33,8 @@ fn main() -> AppExit {
         ))
         .register_definition::<Item>()
         .add_systems(OnEnter(DataState::Loaded), show)
-        .add_systems(Update, show.run_if(on_message::<DataReloaded>))
+        // After the pipeline, which sends it in `Update`.
+        .add_systems(PostUpdate, show.run_if(on_message::<DataReloaded>))
         .run()
 }
 

@@ -28,7 +28,9 @@ pub enum DataState {
     Loading,
     /// Every file is loaded, indexed and validated.
     Loaded,
-    /// Something was wrong: logged, and the app told to exit.
+    /// Something was wrong: logged, and the app told to exit on entering
+    /// it. It exits once that frame ends, so systems in
+    /// `OnEnter(DataState::Failed)` still run.
     Failed,
 }
 
@@ -45,7 +47,9 @@ pub enum DataSystems {
 /// Every problem found while loading and validating the definitions.
 ///
 /// Files that failed to load, ids used twice, families that don't
-/// resolve, and what [`DataSystems::Validate`] finds.
+/// resolve, and what [`DataSystems::Validate`] finds. Of the pass under
+/// way: drained, and logged, as it ends, so it reads empty in
+/// `OnEnter(DataState::Failed)` and once [`DataReloaded`] is sent.
 #[derive(Resource, Debug, Default)]
 pub struct DataErrors(Vec<String>);
 

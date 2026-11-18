@@ -18,7 +18,13 @@ pub use crate::file::{DataFile, DataFileError, FileContents, FileSeed};
 /// deserializer supports `deserialize_any` (JSON, TOML, YAML; not Postcard
 /// or Bincode), as the seed asks it what the file holds:
 ///
+/// A TOML file is a table, so holds one definition: a list (`[[items]]`)
+/// is a table holding an array, which a TOML format would have to present
+/// as the file itself to read as a list.
+///
 /// ```rust,ignore
+/// use serde::de::DeserializeSeed;
+///
 /// struct Json;
 ///
 /// impl DataFormat for Json {

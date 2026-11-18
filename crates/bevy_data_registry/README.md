@@ -36,6 +36,7 @@ at any depth, is read.
 - **Loading**: the data folder is loaded on startup, then every kind is
   indexed by id; ids used twice are errors. `DataState` moves to `Loaded`
   once it is, or to `Failed`, every error logged and the app told to exit.
+  A missing data folder is an error.
 - **Families**: a kind with a `#[definition(base)]` field can build on
   families: a definition takes from its base what it doesn't say
   (`Inherit`). One whose `#[definition(family)]` field is `true` is a
@@ -106,9 +107,9 @@ picked by a file's extension.
 The data folder is loaded with Bevy's `load_folder`, and shares its
 limits:
 
-- A file no loader reads is skipped (with a warning if another loader
-  reads it), but a file of the app's formats that no kind claims fails the
-  folder.
+- Every file in it must be one some asset loader reads: Bevy fails the
+  folder over one none does (`notes.txt`). One another loader reads is
+  skipped, with a warning.
 - On first load, a file that fails to load fails the folder, before the
   files after it are tried: broken files are reported one at a time.
 - With `dev`, a folder deleted or moved out while the app runs isn't
@@ -126,6 +127,7 @@ few lines:
 
 ```rust,ignore
 use bevy_data_registry::format::{DataFormat, FileContents, FileSeed, Ron};
+use serde::de::DeserializeSeed;
 
 struct Json;
 
@@ -150,7 +152,8 @@ app.add_plugins(DataRegistryPlugin {
 
 The rules claim files whatever their format: `file = "items"` claims
 `items.ron` and `items.json` alike. A TOML file is a table, so holds one
-definition.
+definition: a list (`[[items]]`) is a table holding an array, which a TOML
+format would have to present as the file itself to read as a list.
 
 ## Examples
 

@@ -124,7 +124,7 @@ impl Kinds {
     ///
     /// # Panics
     ///
-    /// If `T` claims no files.
+    /// If `T::resolvers()` is empty: whether any files match isn't checked.
     pub fn add<T: Definition>(&self) -> bool {
         let mut kinds = self.0.write().unwrap_or_else(PoisonError::into_inner);
         if kinds.iter().any(|kind| kind.id == TypeId::of::<T>()) {

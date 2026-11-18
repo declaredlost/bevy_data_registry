@@ -54,9 +54,9 @@ pub struct DataRegistryPlugin {
     /// The folder holding the data files, read at any depth: `data`, under
     /// `assets/`, by default. Loaded with Bevy's `load_folder`, so:
     ///
-    /// - a file no loader reads is skipped (with a warning if another loader
-    ///   reads it), but a file of the app's formats that no kind claims fails
-    ///   the folder;
+    /// - every file in it must be one some asset loader reads: Bevy fails the
+    ///   folder over one none does (`notes.txt`); one another loader reads is
+    ///   skipped, with a warning;
     /// - on first load, a file that fails to load fails the folder before the
     ///   files after it are tried, so broken files are reported one at a time;
     /// - with `dev`, a folder in it deleted or moved out while the app runs

@@ -14,7 +14,7 @@ pub trait DataApp {
     ///
     /// # Panics
     ///
-    /// If `T` claims no files.
+    /// If `T::resolvers()` is empty: whether any files match isn't checked.
     fn register_definition<T: Definition>(&mut self) -> &mut Self;
 }
 
