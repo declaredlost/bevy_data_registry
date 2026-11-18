@@ -20,7 +20,7 @@ use self::load::{DataFiles, Progress};
 use crate::Definition;
 use crate::registry::Registry;
 
-/// Where loading the definitions is.
+/// Where loading the definitions is: still loading, loaded, or failed.
 #[derive(States, Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataState {
     /// The data files are loading.
@@ -32,7 +32,7 @@ pub enum DataState {
     Failed,
 }
 
-/// Where your systems hook into loading.
+/// Where your systems hook into loading, such as validating across kinds.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DataSystems {
     /// Checks across kinds, once every kind is indexed: when they've first
@@ -42,9 +42,10 @@ pub enum DataSystems {
     Validate,
 }
 
-/// What's wrong with the definitions: files that failed to load, unknown
-/// tags, ids used twice, families that don't resolve, and what
-/// [`DataSystems::Validate`] finds.
+/// Every problem found while loading and validating the definitions.
+///
+/// Files that failed to load, ids used twice, families that don't
+/// resolve, and what [`DataSystems::Validate`] finds.
 #[derive(Resource, Debug, Default)]
 pub struct DataErrors(Vec<String>);
 

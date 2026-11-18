@@ -99,7 +99,7 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
                 &self.#id_ident
             }
 
-            fn resolvers() -> ::std::vec::Vec<::std::boxed::Box<dyn #krate::Resolve>> {
+            fn resolvers() -> ::std::vec::Vec<::std::boxed::Box<dyn #krate::resolve::Resolve>> {
                 ::std::vec![#(::std::boxed::Box::new(#resolvers)),*]
             }
 
@@ -135,7 +135,7 @@ impl Resolver {
         match self {
             Self::BuiltIn(kind, value) => {
                 let kind = Ident::new(kind, value.span());
-                quote!(#krate::#kind(#value))
+                quote!(#krate::resolve::#kind(#value))
             }
             Self::Custom(expr) => quote!(#expr),
         }
@@ -278,9 +278,9 @@ mod tests {
         .unwrap()
         .to_string();
         for rule in [
-            r#":: bevy_data_registry :: FileName ("items")"#,
-            r#":: bevy_data_registry :: Folder ("affixes/items")"#,
-            r#":: bevy_data_registry :: Extension ("items")"#,
+            r#":: bevy_data_registry :: resolve :: FileName ("items")"#,
+            r#":: bevy_data_registry :: resolve :: Folder ("affixes/items")"#,
+            r#":: bevy_data_registry :: resolve :: Extension ("items")"#,
             r#"Box :: new (TopLevel ("loot"))"#,
         ] {
             assert!(item.contains(rule), "{rule} in {item}");

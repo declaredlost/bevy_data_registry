@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use bevy_data_registry::Ron;
+use bevy_data_registry::format::Ron;
 use bevy_data_registry::prelude::*;
 use serde::Deserialize;
 

@@ -6,9 +6,10 @@ mod definition;
 use proc_macro::TokenStream;
 use syn::{DeriveInput, Error, parse_macro_input};
 
-/// Derives `Definition`: the kind's name, which data files are its, its
-/// id, and, for a kind with families, its base and whether a definition is
-/// a family.
+/// Derives `Definition` from the struct's fields and `#[definition(..)]`.
+///
+/// The kind's name, which data files are its, its id, and, for a kind with
+/// families, its base and whether a definition is a family.
 ///
 /// ```rust,ignore
 /// #[derive(Definition, Deserialize, Clone)]

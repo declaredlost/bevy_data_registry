@@ -10,7 +10,8 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 pub use self::definitions::Definitions;
-use crate::{DataFile, Definition};
+use crate::Definition;
+use crate::file::DataFile;
 
 /// Where every definition of kind `T` is, by id; read it through
 /// [`Definitions`].

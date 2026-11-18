@@ -28,7 +28,7 @@ at any depth, is read.
   any of its rules claims: `#[definition(file = "items")]` (every
   `items.ron`), `folder = "weapons"` (every file under `weapons/`),
   `extension = "items"` (every `*.items.ron`), or `resolve = ..` (any
-  `Resolve`). `app.register_definition::<T>()` adds it.
+  `resolve::Resolve`). `app.register_definition::<T>()` adds it.
 - **Claims**: every data file is exactly one kind's. A file no kind
   claims, or two kinds do, is an error naming the rules; never settled by
   precedence. Two kinds with the same rule panic as they're registered.
@@ -99,7 +99,7 @@ App::new()
 ```
 
 `DataRegistryPlugin`'s fields set the folder (`path`, any asset source)
-and the formats files are written in (`formats`, `Ron` by default), each
+and the formats files are written in (`formats`, `format::Ron` by default), each
 picked by a file's extension.
 
 The data folder is loaded with Bevy's `load_folder`, and shares its
@@ -116,11 +116,13 @@ limits:
 
 ## Formats
 
-A format is a `DataFormat`: its extensions, and reading a file's bytes
+A format is a `format::DataFormat`: its extensions, and reading a file's bytes
 with the `FileSeed` it's given, which knows the kind and whether the file
 holds one or a list. Any serde format fits in a few lines:
 
 ```rust,ignore
+use bevy_data_registry::format::{DataFormat, FileContents, FileSeed, Ron};
+
 struct Json;
 
 impl DataFormat for Json {
@@ -161,9 +163,10 @@ cargo run --example hot_reload --features dev
 ## Layout
 
 - `definition`: the `Definition` and `Inherit` traits.
-- `resolve`: `Resolve`, which files are a kind's; `FileName`, `Folder` and
-  `Extension`.
-- `format`: `DataFormat`, what files are written in; `Ron`.
+- `resolve` (public): `Resolve`, which files are a kind's; `FileName`,
+  `Folder` and `Extension`.
+- `format` (public): `DataFormat`, what files are written in; `Ron`;
+  `FileSeed`, `FileContents` and `DataFile`, re-exported from `file`.
 - `app`: `DataApp`, adding kinds to an app.
 - `file`: `DataFile`, a file's definitions; the kinds and the files each
   claims; the loader, reading a file as its kind in its format.

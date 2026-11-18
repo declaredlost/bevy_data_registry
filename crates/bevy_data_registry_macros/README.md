@@ -43,7 +43,7 @@ On the struct, which must have named fields:
   - `#[definition(extension = "items")]`: every file ending
     `.items.<format>`: `swords.items.ron`.
   - `#[definition(resolve = ..)]`: any value of a type implementing
-    `Resolve`: `resolve = TopLevel("loot")`.
+    `resolve::Resolve`: `resolve = TopLevel("loot")`.
 - `#[definition(crate = "..")]`: the path to `bevy_data_registry`, where
   it's renamed or re-exported (`crate = "engine::data"`).
   `::bevy_data_registry` if left out.

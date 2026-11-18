@@ -17,8 +17,9 @@ use crate::Definition;
 use crate::format::DataFormat;
 use crate::resolve::Resolve;
 
-/// The definitions of one data file, all of the kind that claims it: one,
-/// `(id: ..)`, or a list of them, `[(id: ..), ..]`.
+/// The definitions read from one data file, all of the kind that claims it.
+///
+/// A file holds one, `(id: ..)`, or a list of them, `[(id: ..), ..]`.
 ///
 /// Read definitions through [`Definitions`](crate::Definitions), which
 /// indexes every file's.
@@ -155,12 +156,13 @@ impl Kinds {
     }
 }
 
-/// Reads a data file as the kind that claims it: one definition, or a
-/// list of them. Given to [`DataFormat::read`], which runs it on its
-/// format's deserializer.
+/// Reads a data file as the kind that claims it, on a format's deserializer.
+///
+/// Given to [`DataFormat::read`], which runs it on its deserializer: it
+/// reads one definition, or a list of them.
 pub struct FileSeed<'a>(&'a Kind);
 
-/// What a [`FileSeed`] read: a file's definitions.
+/// What a [`FileSeed`] read from a file: its definitions, of the one kind.
 pub struct FileContents(Vec<Entry>);
 
 impl<'de> DeserializeSeed<'de> for FileSeed<'_> {
@@ -249,8 +251,8 @@ pub enum DataFileError {
 
 impl AssetLoader for DataLoader {
     type Asset = DataFile;
-    type Settings = ();
     type Error = DataFileError;
+    type Settings = ();
 
     async fn load(
         &self,
@@ -346,7 +348,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::Ron;
+    use crate::format::Ron;
 
     #[derive(crate::Definition, Debug, Deserialize)]
     #[definition(file = "tags")]
@@ -457,6 +459,7 @@ mod tests {
             fn extensions(&self) -> &[&'static str] {
                 self.0
             }
+
             fn read(&self, _: &[u8], _: FileSeed<'_>) -> Result<FileContents, BevyError> {
                 Ok(FileContents(Vec::new()))
             }

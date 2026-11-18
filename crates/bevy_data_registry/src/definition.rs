@@ -9,9 +9,10 @@ use serde::de::DeserializeOwned;
 
 use crate::resolve::Resolve;
 
-/// A kind of data definition: read from the data files its
-/// [`resolvers`](Self::resolvers) claim, one definition or a list of them
-/// per file, `(id: "sword", ..)`; and read through
+/// A kind of data definition, read from the data files its rules claim.
+///
+/// The files its [`resolvers`](Self::resolvers) claim hold one definition
+/// or a list of them each, `(id: "sword", ..)`; read them through
 /// [`Definitions`](crate::Definitions).
 ///
 /// Derive it (see [the derive macro](derive@crate::Definition)) rather than
@@ -60,8 +61,10 @@ pub trait Definition: DeserializeOwned + Send + Sync + 'static {
     }
 }
 
-/// How a definition of a kind with families fills in what it doesn't say
-/// from its base. The derived [`Definition`] calls it on a clone of the
+/// Fills in what a definition leaves out from its base, in kinds with
+/// families.
+///
+/// The derived [`Definition`] calls it on a clone of the
 /// definition, with its base already whole.
 ///
 /// ```rust,ignore

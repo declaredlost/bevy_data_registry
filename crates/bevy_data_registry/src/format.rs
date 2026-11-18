@@ -1,12 +1,16 @@
-//! Formats data files are written in: [`DataFormat`], and [`Ron`], the one
-//! that comes with the crate.
+//! Formats data files are written in, and what they read files into.
+//!
+//! [`DataFormat`] is a format; [`Ron`] the one that comes with the crate.
+//! A format reads a file with a [`FileSeed`] into [`FileContents`], which
+//! becomes a [`DataFile`] asset.
 
 use bevy::prelude::*;
 
-use crate::file::{FileContents, FileSeed};
+pub use crate::file::{DataFile, FileContents, FileSeed};
 
-/// A format data files are written in, chosen by their extension. Added
-/// to [`DataRegistryPlugin::formats`](crate::DataRegistryPlugin::formats).
+/// A format data files are written in, chosen by their extension.
+///
+/// Added to [`DataRegistryPlugin::formats`](crate::DataRegistryPlugin::formats).
 ///
 /// A format only builds its deserializer over a file's bytes and runs the
 /// [`FileSeed`] it's given on it: which kind the file holds, and whether
@@ -40,8 +44,8 @@ pub trait DataFormat: Send + Sync + 'static {
     fn read(&self, bytes: &[u8], seed: FileSeed<'_>) -> Result<FileContents, BevyError>;
 }
 
-/// [RON](https://github.com/ron-rs/ron): `(id: "sword", price: 3)`. The
-/// default format.
+/// The default format, [RON](https://github.com/ron-rs/ron):
+/// `(id: "sword", price: 3)`.
 #[derive(Clone)]
 pub struct Ron {
     /// The extensions of its files: `ron` by default.

@@ -7,7 +7,7 @@ use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath, LoadState, Lo
 use bevy::prelude::*;
 
 use super::{DataErrors, DataState};
-use crate::DataFile;
+use crate::file::DataFile;
 
 /// The data folder, loaded with every file in it.
 #[derive(Resource)]

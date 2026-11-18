@@ -5,9 +5,10 @@ use bevy::prelude::*;
 use super::load::{DataFiles, Progress};
 use super::{DataErrors, DataState};
 
-/// Sent once the definitions were indexed and validated again after a
-/// file changed, was added or removed while the app runs (hot reload,
-/// with `dev`): whatever was built from them should be built again.
+/// Sent once the definitions are indexed and validated after a hot reload.
+///
+/// A file changed, was added or was removed while the app runs (with
+/// `dev`): whatever was built from the definitions should be built again.
 #[derive(Message, Debug, Clone, Copy)]
 pub struct DataReloaded;
 

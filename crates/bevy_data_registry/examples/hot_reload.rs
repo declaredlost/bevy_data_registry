@@ -1,6 +1,7 @@
 //! Hot reload: edit `assets/hot_reload/items.ron` (or add another
-//! `items.ron` in a folder next to it) while this runs, and the definitions are indexed and validated
-//! again, and `DataReloaded` sent. Needs the `dev` feature.
+//! `items.ron` in a folder next to it) while this runs, and the definitions are
+//! indexed and validated again, and `DataReloaded` sent. Needs the `dev`
+//! feature.
 //!
 //! ```sh
 //! cargo run --example hot_reload --features dev

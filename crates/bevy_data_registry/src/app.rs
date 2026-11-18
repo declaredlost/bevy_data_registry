@@ -2,11 +2,10 @@
 
 use bevy::prelude::*;
 
-use crate::Definition;
 use crate::file::Kinds;
-use crate::pipeline;
+use crate::{Definition, pipeline};
 
-/// Adds kinds of definitions to an [`App`], as
+/// Adds kinds of definitions to an [`App`](bevy::app::App), as
 /// [`AssetApp`](bevy::asset::AssetApp) adds assets.
 pub trait DataApp {
     /// Adds kind `T`: its definitions are read from every data file it

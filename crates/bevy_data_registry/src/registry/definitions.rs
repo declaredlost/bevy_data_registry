@@ -6,10 +6,11 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::{Location, Registry};
-use crate::{DataFile, Definition};
+use crate::Definition;
+use crate::file::DataFile;
 
 /// The definitions of kind `T`, by id: a system param, as
-/// [`Assets`] is for assets.
+/// [`Assets`](bevy::asset::Assets) is for assets.
 ///
 /// Empty until [`DataState::Loaded`](crate::DataState::Loaded). What it
 /// reads is whole: what a definition takes from its family is filled in,
@@ -117,8 +118,8 @@ impl<T: Definition> Definitions<'_, T> {
 }
 
 impl<'a, T: Definition> IntoIterator for &'a Definitions<'_, T> {
-    type Item = (&'a T::Id, &'a T);
     type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
+    type Item = (&'a T::Id, &'a T);
 
     fn into_iter(self) -> Self::IntoIter {
         Box::new(self.iter())

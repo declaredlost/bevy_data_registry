@@ -5,8 +5,9 @@ use bevy::prelude::*;
 
 use super::DataErrors;
 use super::load::DataFiles;
+use crate::Definition;
+use crate::file::DataFile;
 use crate::registry::Registry;
-use crate::{DataFile, Definition};
 
 /// Indexes every definition of kind `T`, from every file, and makes those
 /// that build on a family whole: rejecting ids used twice and families

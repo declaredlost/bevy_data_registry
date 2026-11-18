@@ -1,11 +1,14 @@
-//! Which data files are a kind's: [`Resolve`], and the resolvers that come
-//! with the crate, [`FileName`], [`Folder`] and [`Extension`].
+//! Which data files are a kind's: the rules, and the ones built in.
+//!
+//! [`Resolve`] is a rule; [`FileName`], [`Folder`] and [`Extension`] come
+//! with the crate, set with the derive's `file`, `folder` and `extension`.
 
 use core::fmt;
 use std::path::Path;
 
-/// A rule for which data files hold a kind's definitions, chosen with
-/// `#[definition(file = "..")]`, `folder`, `extension`, or
+/// A rule for which data files hold a kind's definitions, set in the derive.
+///
+/// Chosen with `#[definition(file = "..")]`, `folder`, `extension`, or
 /// `resolve = ..` for any other.
 ///
 /// A kind's files are those any of its rules claims. Every data file must
@@ -38,8 +41,9 @@ pub trait Resolve: fmt::Display + Send + Sync + 'static {
     fn claims(&self, path: &Path) -> bool;
 }
 
-/// Claims every file with this name, in any folder: `FileName("items")`
-/// claims `items.ron` and `enemies/spider/items.ron`, whatever its format.
+/// Claims every file with this name, in any folder, whatever its format.
+///
+/// `FileName("items")` claims `items.ron` and `enemies/spider/items.ron`.
 /// A name is the file's up to its first dot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileName(pub &'static str);
@@ -56,8 +60,9 @@ impl fmt::Display for FileName {
     }
 }
 
-/// Claims every file in this folder, at any depth, from the data folder's
-/// top: `Folder("skills")` claims `skills/fire.ron` and
+/// Claims every file in this folder, at any depth, from the data folder's top.
+///
+/// `Folder("skills")` claims `skills/fire.ron` and
 /// `skills/rare/void.ron`, not `enemies/skills/bite.ron`. Can be several
 /// folders deep: `Folder("affixes/prefixes")`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,8 +81,9 @@ impl fmt::Display for Folder {
     }
 }
 
-/// Claims every file whose name ends in this, before its format's
-/// extension, in any folder: `Extension("items")` claims
+/// Claims every file whose extension, before its format's, is this one.
+///
+/// In any folder: `Extension("items")` claims
 /// `swords.items.ron` and `spider/loot.items.json`, not `items.ron`
 /// (a [`FileName`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

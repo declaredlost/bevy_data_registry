@@ -7,40 +7,38 @@ extern crate self as bevy_data_registry;
 mod app;
 mod definition;
 mod file;
-mod format;
+pub mod format;
 mod pipeline;
 mod registry;
-mod resolve;
+pub mod resolve;
 
 use std::sync::Arc;
 
 use bevy::asset::{AssetApp, AssetPath};
 use bevy::prelude::*;
-/// Derives [`Definition`](trait@Definition): its name, the files it claims,
-/// its id, and, for a kind with families, its base and family flag. See
-/// the crate's docs.
 pub use bevy_data_registry_macros::Definition;
 
 pub use crate::app::DataApp;
 pub use crate::definition::{Definition, Inherit};
-pub use crate::file::{DataFile, FileContents, FileSeed};
-use crate::file::{DataLoader, Kinds};
-pub use crate::format::{DataFormat, Ron};
+use crate::file::{DataFile, DataLoader, Kinds};
+use crate::format::{DataFormat, Ron};
 pub use crate::pipeline::{DataErrors, DataReloaded, DataState, DataSystems};
 pub use crate::registry::Definitions;
-pub use crate::resolve::{Extension, FileName, Folder, Resolve};
 
 /// The most used items: `use bevy_data_registry::prelude::*;`.
 pub mod prelude {
     pub use crate::{
         DataApp, DataErrors, DataRegistryPlugin, DataReloaded, DataState, DataSystems, Definition,
-        Definitions, Extension, FileName, Folder, Inherit, Resolve,
+        Definitions, Inherit,
     };
 }
 
-/// Loads definitions from every file under [`path`](Self::path), in any of
-/// its [`formats`](Self::formats), as the kind added with
-/// [`DataApp::register_definition`] that claims it; see the crate's docs.
+/// Loads every data file under [`path`](Self::path) as the kind that
+/// claims it.
+///
+/// Files are read in any of its [`formats`](Self::formats), as the kind
+/// added with [`DataApp::register_definition`] that claims them; see the
+/// crate's docs.
 ///
 /// ```rust,ignore
 /// app.add_plugins(DataRegistryPlugin::default());
@@ -54,16 +52,14 @@ pub struct DataRegistryPlugin {
     /// The folder holding the data files, read at any depth: `data`, under
     /// `assets/`, by default. Loaded with Bevy's `load_folder`, so:
     ///
-    /// - every file in it must be one some loader reads: Bevy fails the
-    ///   whole folder over one that none does;
-    /// - on first load, a file that fails to load fails the folder before
-    ///   the files after it are tried, so broken files are reported one at
-    ///   a time;
+    /// - every file in it must be one some loader reads: Bevy fails the whole
+    ///   folder over one that none does;
+    /// - on first load, a file that fails to load fails the folder before the
+    ///   files after it are tried, so broken files are reported one at a time;
     /// - with `dev`, a folder in it deleted or moved out while the app runs
     ///   isn't noticed, its definitions kept until a restart (deleting its
     ///   files first is);
-    /// - a folder in it linking back to one it's in makes loading never
-    ///   end.
+    /// - a folder in it linking back to one it's in makes loading never end.
     pub path: AssetPath<'static>,
     /// The formats data files are written in, each chosen by a file's
     /// extension: [`Ron`] by default.
