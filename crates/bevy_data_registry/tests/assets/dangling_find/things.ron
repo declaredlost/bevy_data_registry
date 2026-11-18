@@ -1,0 +1,4 @@
+// A find whose tag is no tag: the reference fails loading.
+[
+    (id: "pebble", weight: 1, finds: [(tag: "nope")]),
+]

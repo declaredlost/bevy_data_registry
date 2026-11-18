@@ -1,3 +1,5 @@
+// `dust` is worth nothing: the example's own check catches it.
 [
     (id: "bone", price: 1),
+    (id: "dust", price: 0),
 ]

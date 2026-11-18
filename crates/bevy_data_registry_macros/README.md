@@ -1,7 +1,8 @@
 # bevy_data_registry_macros
 
-The derive macro of [`bevy_data_registry`](https://docs.rs/bevy_data_registry): use it
-through that crate, which re-exports it, rather than depending on this one.
+The derive macros of [`bevy_data_registry`](https://docs.rs/bevy_data_registry): use
+them through that crate, which re-exports them, rather than depending on
+this one.
 
 ## `#[derive(Definition)]`
 
@@ -15,13 +16,14 @@ use serde::Deserialize;
 #[derive(Definition, Deserialize, Clone)]
 #[definition(file = "items", folder = "items")]
 struct Item {
-    id: String,
+    id: Id<Item>,
     #[definition(base)]
-    base: Option<String>,
+    base: Option<Id<Item>>,
     #[definition(family)]
     #[serde(default)]
     family: bool,
     price: Option<u32>,
+    makes: Vec<Id<Item>>, // checked to be items
 }
 
 impl Inherit for Item {
@@ -51,16 +53,38 @@ On the struct, which must have named fields:
 On its fields, each at most once:
 
 - `#[definition(id)]`: what tells its definitions apart. The field named
-  `id` if none is marked.
+  `id` if none is marked. If its type is written `Id<..>`, it must be the
+  kind's own: `Id<Self>`. This goes by the type as written: another type
+  named `Id` needs an alias, and an alias of another kind's `Id` isn't
+  caught here (its references fail at run time).
 - `#[definition(base)]`: an `Option` of the id, what a definition builds
   on. Makes it a kind with families: the struct must then be `Clone` and
   implement `Inherit`, which fills a clone of the definition in from its
   base.
 - `#[definition(family)]`: a `bool`, whether a definition is a family,
   only built on and never read. Needs a `base` field.
+- `#[definition(unchecked)]`: its `Id`s aren't checked to name a
+  definition. Every other field but the id is, if its type is
+  `References`.
+
+## `#[derive(References)]`
+
+For a type of your own a definition holds: its `Id`s are checked too.
+Every field of a type that's `References`, but those marked
+`#[definition(unchecked)]`; structs and enums.
+
+```rust,ignore
+#[derive(References, Deserialize)]
+struct Drop {
+    item: Id<Item>,
+    chance: f32,
+}
+```
 
 ## Layout
 
 - `lib`: the macro's entry point.
 - `definition`: `#[derive(Definition)]`: its attributes, and the impl it
   writes.
+- `references`: `#[derive(References)]`, and walking fields for the `Id`s
+  in them.

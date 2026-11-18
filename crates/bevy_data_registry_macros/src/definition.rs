@@ -6,6 +6,8 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Error, Expr, Field, Fields, Ident, LitStr, Path, Result};
 
+use crate::references;
+
 /// What the attributes say about the struct's fields.
 struct Marked<'a> {
     id: Option<&'a Field>,
@@ -88,6 +90,13 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
         ));
     }
     let resolvers = resolvers.iter().map(|resolver| resolver.tokens(&krate));
+    let id_check = is_an_id(id_type).then(|| {
+        quote! {
+            // Its id is an id of its own kind.
+            let _: &#krate::Id<Self> = &self.#id_ident;
+        }
+    });
+    let references = references_fn(&krate, fields, id, marked.base, &input.generics)?;
 
     Ok(quote! {
         impl #impl_generics #krate::Definition for #name #type_generics #where_clause {
@@ -96,8 +105,11 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
             type Id = #id_type;
 
             fn id(&self) -> &Self::Id {
+                #id_check
                 &self.#id_ident
             }
+
+            #references
 
             fn resolvers() -> ::std::vec::Vec<::std::boxed::Box<dyn #krate::resolve::Resolve>> {
                 ::std::vec![#(::std::boxed::Box::new(#resolvers)),*]
@@ -110,6 +122,54 @@ pub(crate) fn expand(input: &DeriveInput) -> Result<TokenStream> {
 }
 
 const NAMED_ONLY: &str = "a definition is a struct with named fields";
+
+/// `fn references`: walking every field but the id, the base (checked as
+/// families are made whole) and those marked `#[definition(unchecked)]`.
+fn references_fn<'a>(
+    krate: &TokenStream,
+    fields: impl IntoIterator<Item = &'a Field>,
+    id: &Field,
+    base: Option<&Field>,
+    generics: &syn::Generics,
+) -> Result<TokenStream> {
+    let mut walks = Vec::new();
+    for field in fields.into_iter().filter(|field| {
+        !core::ptr::eq(*field, id) && !base.is_some_and(|base| core::ptr::eq(*field, base))
+    }) {
+        if references::unchecked(field, &["id", "base", "family"])? {
+            continue;
+        }
+        let Some(ident) = &field.ident else {
+            continue;
+        };
+        let name = ident.to_string();
+        let name = name.strip_prefix("r#").unwrap_or(&name);
+        walks.extend(references::walk(
+            krate,
+            name,
+            &quote!(&self.#ident),
+            &field.ty,
+            generics,
+        ));
+    }
+    let walking = references::walking(krate);
+    Ok(quote! {
+        fn references(&self, to: &mut #krate::Referenced) {
+            #walking
+            #(#walks)*
+        }
+    })
+}
+
+/// Whether `ty` is written as an `Id<..>`: checked to be the kind's own.
+fn is_an_id(ty: &syn::Type) -> bool {
+    let syn::Type::Path(path) = ty else {
+        return false;
+    };
+    path.path.segments.last().is_some_and(|last| {
+        last.ident == "Id" && matches!(last.arguments, syn::PathArguments::AngleBracketed(_))
+    })
+}
 
 /// What the struct's own `#[definition(..)]` says.
 struct Options {
@@ -228,8 +288,11 @@ fn mark<'a>(field: &'a Field, marked: &mut Marked<'a>) -> Result<()> {
                 &mut marked.base
             } else if meta.path.is_ident("family") {
                 &mut marked.family
+            } else if meta.path.is_ident("unchecked") {
+                // For `references`.
+                return Ok(());
             } else {
-                return Err(meta.error("expected `id`, `base` or `family`"));
+                return Err(meta.error("expected `id`, `base`, `family` or `unchecked`"));
             };
             if slot.is_some() {
                 let what = meta
@@ -322,6 +385,43 @@ mod tests {
     }
 
     #[test]
+    fn an_id_field_is_checked_to_be_the_kinds_and_others_walked() {
+        let item = expand(&parse_quote! {
+            #[definition(file = "monsters")]
+            struct Monster {
+                #[definition(base)]
+                base: Option<Id<Monster>>,
+                id: Id<Monster>,
+                drops: Vec<Id<Item>>,
+                #[definition(unchecked)]
+                rumoured: Vec<Id<Item>>,
+                health: u32,
+            }
+        })
+        .unwrap()
+        .to_string();
+        assert!(
+            item.contains("let _ : & :: bevy_data_registry :: Id < Self > = & self . id"),
+            "{item}"
+        );
+        assert!(item.contains(r#"to . field ("drops")"#), "{item}");
+        assert!(item.contains(r#"to . field ("health")"#), "{item}");
+        assert!(!item.contains(r#""rumoured""#), "unchecked: {item}");
+        assert!(!item.contains(r#"to . field ("id")"#), "its own: {item}");
+        assert!(
+            !item.contains(r#"to . field ("base")"#),
+            "checked by families: {item}"
+        );
+        let named = expand(&parse_quote! {
+            #[definition(file = "items")]
+            struct Item { id: String }
+        })
+        .unwrap()
+        .to_string();
+        assert!(!named.contains("Id < Self >"), "not an `Id`: {named}");
+    }
+
+    #[test]
     fn the_crate_can_be_named_where_its_renamed() {
         let default = expand(&parse_quote! {
             #[definition(file = "items")]
@@ -382,7 +482,7 @@ mod tests {
         );
         assert!(
             error(&parse_quote! { struct Item { #[definition(key)] id: String } })
-                .contains("expected `id`, `base` or `family`")
+                .contains("expected `id`, `base`, `family` or `unchecked`")
         );
     }
 }

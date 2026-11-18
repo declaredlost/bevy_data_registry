@@ -38,6 +38,14 @@ pub trait Definition: DeserializeOwned + Send + Sync + 'static {
     /// `#[definition(file = "..")]`, `folder`, `extension` and `resolve`.
     fn resolvers() -> Vec<Box<dyn Resolve>>;
 
+    /// Visits every [`Id`](crate::Id) in it but its own: those checked to
+    /// name a definition. Derived: every field but the id and those marked
+    /// `#[definition(unchecked)]`, of a type that's
+    /// [`References`](crate::References).
+    fn references(&self, to: &mut crate::Referenced) {
+        let _ = to;
+    }
+
     /// What it builds on, if anything: another definition of its kind,
     /// often a family, though any can be built on.
     fn base(&self) -> Option<&Self::Id> {

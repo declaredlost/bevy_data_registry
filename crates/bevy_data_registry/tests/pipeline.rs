@@ -19,17 +19,32 @@ use serde::de::DeserializeSeed;
 #[definition(folder = "things", file = "things")]
 #[serde(deny_unknown_fields)]
 struct Thing {
-    id: String,
+    id: Id<Thing>,
     #[definition(base)]
     #[serde(default)]
-    base: Option<String>,
+    base: Option<Id<Thing>>,
     #[definition(family)]
     #[serde(default)]
     family: bool,
     #[serde(default)]
     weight: Option<u32>,
+    /// Checked to be tags by the crate.
     #[serde(default)]
-    tags: Vec<String>,
+    tags: Vec<Id<Tag>>,
+    /// Checked through `Find`.
+    #[serde(default)]
+    finds: Vec<Find>,
+}
+
+/// What's found in a thing: a type of the app's own holding an `Id`.
+#[derive(References, Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Find {
+    tag: Id<Tag>,
+    /// Never checked: may name no tag.
+    #[definition(unchecked)]
+    #[serde(default)]
+    rumour: Option<Id<Tag>>,
 }
 
 impl Inherit for Thing {
@@ -43,7 +58,7 @@ impl Inherit for Thing {
 #[definition(file = "tags", extension = "tags")]
 #[serde(deny_unknown_fields)]
 struct Tag {
-    id: String,
+    id: Id<Tag>,
 }
 
 /// A second format, written outside the crate.
@@ -62,12 +77,10 @@ impl DataFormat for Json {
     }
 }
 
-/// Every thing's tags are tags.
-fn tags_exist(things: Definitions<Thing>, tags: Definitions<Tag>, mut errors: ResMut<DataErrors>) {
-    for (id, thing) in &things {
-        for tag in thing.tags.iter().filter(|tag| !tags.contains(*tag)) {
-            errors.push(format!("thing `{id}` has tag `{tag}`, which isn't there"));
-        }
+/// Every thing weighs something: a check of the app's own.
+fn weighed(things: Definitions<Thing>, mut errors: ResMut<DataErrors>) {
+    for (id, _) in things.iter().filter(|(_, thing)| thing.weight.is_none()) {
+        errors.push(format!("thing `{id}` weighs nothing"));
     }
 }
 
@@ -108,7 +121,7 @@ fn app(assets: String, folder: &'static str, watch: bool) -> TestApp {
             app.register_definition::<Thing>()
                 .register_definition::<Tag>()
                 .register_definition::<Thing>()
-                .add_systems(Update, tags_exist.in_set(DataSystems::Validate));
+                .add_systems(Update, weighed.in_set(DataSystems::Validate));
         })
         .build()
 }
@@ -135,26 +148,61 @@ fn definitions_load_index_and_come_whole(app: &mut TestApp) {
     });
     assert_eq!(state(app), DataState::Loaded);
     app.run_system(|things: Definitions<Thing>, tags: Definitions<Tag>| {
-        let weight = |id: &str| things.get(id).and_then(|thing| thing.weight);
+        let weight = |id: &str| {
+            things
+                .get(&Id::from_name(id))
+                .and_then(|thing| thing.weight)
+        };
         assert_eq!(weight("pebble"), Some(1));
         assert_eq!(weight("boulder"), Some(5), "from its family");
         assert_eq!(weight("flint"), Some(2), "its own, alone in its file");
         assert_eq!(weight("slate"), Some(5), "from a file named for it");
         assert_eq!(weight("gravel"), Some(1), "in a folder named as a file");
-        assert!(things.get("rocks").is_none(), "a family isn't read");
-        assert!(!things.contains("rocks"));
-        let mut ids: Vec<&String> = things.ids().collect();
-        ids.sort();
+        assert!(things.get(&ROCKS).is_none(), "a family isn't read");
+        assert!(!things.contains(&ROCKS));
+        let mut ids: Vec<&str> = things.ids().filter_map(|id| things.name(id)).collect();
+        ids.sort_unstable();
         assert_eq!(ids, ["boulder", "flint", "gravel", "pebble", "slate"]);
         assert_eq!(things.len(), 5);
         assert_eq!(
-            things.path("flint").map(ToString::to_string).as_deref(),
+            things
+                .path(&Id::from_name("flint"))
+                .map(ToString::to_string)
+                .as_deref(),
             Some("data/stones/things.ron")
         );
         assert_eq!(tags.len(), 3);
-        assert!(tags.contains("heavy") && tags.contains("sharp"));
-        assert!(tags.contains("smooth"), "from JSON, by its extension");
+        let tag = |name| tags.contains(&Id::from_name(name));
+        assert!(tag("heavy") && tag("sharp"));
+        let slate = things.get(&Id::from_name("slate")).expect("loaded");
+        assert_eq!(
+            slate.tags,
+            [Id::from_name("heavy"), Id::from_name("smooth")]
+        );
+        assert_eq!(tags.name(&slate.tags[0]), Some("heavy"), "named as read");
+        assert_eq!(slate.finds[0].tag, Id::from_name("sharp"));
+        assert_eq!(
+            slate.finds[0].rumour,
+            Some(Id::from_name("glowing")),
+            "unchecked: no tag, yet loaded"
+        );
+        assert!(tag("smooth"), "from JSON, by its extension");
     });
+}
+
+/// A family: never read.
+const ROCKS: Id<Thing> = Id::from_name("rocks");
+
+#[bevy_harness::test(setup = loading("dangling"), timeout = 10)]
+fn a_reference_to_what_isnt_there_fails_loading(app: &mut TestApp) {
+    wait(app, "loading ends", |app| state(app) != DataState::Loading);
+    assert_eq!(state(app), DataState::Failed);
+}
+
+#[bevy_harness::test(setup = loading("dangling_find"), timeout = 10)]
+fn a_reference_in_a_type_of_the_apps_own_is_checked(app: &mut TestApp) {
+    wait(app, "loading ends", |app| state(app) != DataState::Loading);
+    assert_eq!(state(app), DataState::Failed);
 }
 
 #[bevy_harness::test(setup = loading("broken"), timeout = 10)]
@@ -278,7 +326,7 @@ mod hot_reload {
     }
 
     fn has(app: &mut TestApp, id: &'static str) -> bool {
-        app.run_system(move |tags: Definitions<Tag>| tags.contains(id))
+        app.run_system(move |tags: Definitions<Tag>| tags.contains(&Id::from_name(id)))
     }
 
     fn folder_failed(app: &TestApp) -> bool {

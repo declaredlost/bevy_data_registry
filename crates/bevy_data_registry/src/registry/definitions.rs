@@ -54,6 +54,13 @@ impl<T: Definition> Definitions<'_, T> {
         self.registry.defs.contains_key(id)
     }
 
+    /// The name `id` was read from, if it's an [`Id`](crate::Id) read in
+    /// a data file, as a definition's own or a reference to one: `Id`s show
+    /// as their hash.
+    pub fn name(&self, id: &T::Id) -> Option<&str> {
+        self.registry.name(id)
+    }
+
     /// The path of the file the definition with this id is in, families
     /// included: for messages about it.
     pub fn path<Q>(&self, id: &Q) -> Option<&AssetPath<'static>>

@@ -42,10 +42,19 @@ at any depth, is read.
   (`Inherit`). One whose `#[definition(family)]` field is `true` is a
   family itself: only built on, never read. A missing base or a cycle is
   an error.
+- **Ids**: `Id<T>`, the id of a definition of kind `T`: written as a name
+  in the data (`"pelt"`), held as a 64-bit hash, `Copy`, and typed by its
+  kind. As a kind's own id, and as a reference to another definition
+  (`drops: Vec<Id<Item>>`), every one checked to name a definition, its
+  field named in the error. It shows as its hash; `Definitions::name`
+  gives the name it was read from. Two names of a kind with one hash are
+  an error. Any other id type works too (`String`), unchecked.
 - **Reading**: `Definitions<T>`, a system param, as `Assets<T>` is: `get`,
-  `contains`, `iter`, every definition whole.
-- **Validating**: your checks across kinds run in `DataSystems::Validate`,
-  pushing what's wrong to `DataErrors`.
+  `contains`, `iter`, `name`, every definition whole.
+- **Validating**: references are checked by the crate; your other checks
+  across kinds run in `DataSystems::Validate`, pushing what's wrong to
+  `DataErrors`. A type of your own holding `Id`s derives `References` to
+  have them checked; a field marked `#[definition(unchecked)]` isn't.
 - **Hot reload** (`dev`): a file changed, added or removed is loaded again,
   every kind indexed and validated again, problems logged, and
   `DataReloaded` sent.
@@ -58,16 +67,17 @@ use serde::Deserialize;
 #[derive(Definition, Deserialize)]
 #[definition(file = "monsters")]
 struct Monster {
-    id: String,
-    drops: Vec<String>,
+    id: Id<Monster>,
+    drops: Vec<Id<Item>>, // each checked to be an item
+    health: u32,
 }
 
 #[derive(Definition, Deserialize, Clone)]
 #[definition(file = "items", extension = "items")]
 struct Item {
-    id: String,
+    id: Id<Item>,
     #[definition(base)]
-    base: Option<String>,
+    base: Option<Id<Item>>,
     #[definition(family)]
     #[serde(default)]
     family: bool,
@@ -80,15 +90,11 @@ impl Inherit for Item {
     }
 }
 
-fn drops_exist(
-    monsters: Definitions<Monster>,
-    items: Definitions<Item>,
-    mut errors: ResMut<DataErrors>,
-) {
-    for (id, monster) in &monsters {
-        for drop in monster.drops.iter().filter(|drop| !items.contains(*drop)) {
-            errors.push(format!("monster `{id}` drops `{drop}`, which isn't there"));
-        }
+/// A check of the app's own: references are checked already.
+fn alive(monsters: Definitions<Monster>, mut errors: ResMut<DataErrors>) {
+    for (id, _) in monsters.iter().filter(|(_, monster)| monster.health == 0) {
+        let name = monsters.name(id).unwrap_or_default();
+        errors.push(format!("monster `{name}` has no health"));
     }
 }
 
@@ -96,7 +102,7 @@ App::new()
     .add_plugins((DefaultPlugins, DataRegistryPlugin::default()))
     .register_definition::<Monster>()
     .register_definition::<Item>()
-    .add_systems(Update, drops_exist.in_set(DataSystems::Validate))
+    .add_systems(Update, alive.in_set(DataSystems::Validate))
     .run();
 ```
 
@@ -162,7 +168,8 @@ Each reads its own folder under `assets/`:
 - `basic`: kinds claiming files by name and extension, looked up by id.
 - `families`: a kind claiming a folder; definitions built on families,
   made whole.
-- `validation`: a check across kinds failing loading, as its data is made to.
+- `validation`: a reference to nothing, and a check of the example's own,
+  failing loading, as its data is made to.
 - `hot_reload` (`--features dev`): edit the data while it runs.
 
 ```sh
@@ -173,6 +180,9 @@ cargo run --example hot_reload --features dev
 ## Layout
 
 - `definition`: the `Definition` and `Inherit` traits.
+- `id`: `Id`; the names ids are read from, kept per file.
+- `references`: `References` and `Referenced`, finding the `Id`s in a
+  definition.
 - `resolve` (public): `Resolve`, which files are a kind's; `FileName`,
   `Folder` and `Extension`.
 - `format` (public): `DataFormat`, what files are written in; `Ron`;
@@ -185,4 +195,5 @@ cargo run --example hot_reload --features dev
   families made whole; `Definitions`, reading them.
 - `pipeline`: `DataState`, `DataSystems`, `DataErrors`, and the steps of
   each frame: `load` (the folder, until every file is settled), `index`,
-  `finish` (the first load's end, and each reload's).
+  `references` (checking every `Id`), `finish` (the first load's end, and
+  each reload's).

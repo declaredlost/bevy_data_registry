@@ -46,7 +46,9 @@ pub trait DataFormat: Send + Sync + 'static {
     /// of this format needs another extension (`level.ron`).
     fn extensions(&self) -> &[&'static str];
 
-    /// Reads `bytes`, a whole file, with `seed`.
+    /// Reads `bytes`, a whole file, with `seed`: on the thread it's called
+    /// on, as the names [`Id`](crate::Id)s are read from are kept there, for
+    /// messages; read elsewhere, they show as hashes.
     ///
     /// # Errors
     ///

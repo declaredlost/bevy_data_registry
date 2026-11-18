@@ -15,6 +15,9 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
 use crate::Definition;
 use crate::format::DataFormat;
+use crate::id::{self, Id, Names};
+use crate::references::{Reference, Referenced};
+use crate::registry::Registry;
 use crate::resolve::Resolve;
 
 /// The definitions read from one data file, all of the kind that claims it.
@@ -26,6 +29,8 @@ use crate::resolve::Resolve;
 #[derive(Asset, TypePath)]
 pub struct DataFile {
     entries: Vec<Entry>,
+    /// The names its [`Id`]s were read from, for messages.
+    names: Names,
 }
 
 /// One definition of a file, its kind erased: shared with the registry,
@@ -48,6 +53,24 @@ impl DataFile {
         self.entries.is_empty()
     }
 
+    /// The names its [`Id`]s were read from.
+    pub(crate) fn names(&self) -> &Names {
+        &self.names
+    }
+
+    /// Every definition's kind, its id by name, and the [`Id`]s in it but
+    /// its own, as `kinds` knows them.
+    pub(crate) fn references<'a>(
+        &'a self,
+        kinds: &'a [Kind],
+    ) -> impl Iterator<Item = (&'a Kind, String, Vec<Reference>)> {
+        self.entries.iter().filter_map(|entry| {
+            let kind = kinds.iter().find(|kind| kind.id == entry.kind)?;
+            let label = (kind.label)(&*entry.value, &self.names);
+            Some((kind, label, (kind.references)(&*entry.value)))
+        })
+    }
+
     /// Its definitions of kind `T`, with their positions in the file.
     pub(crate) fn of<T: Definition>(&self) -> impl Iterator<Item = (usize, &T)> {
         self.entries.iter().enumerate().filter_map(|(at, entry)| {
@@ -56,6 +79,15 @@ impl DataFile {
                 .flatten()
                 .map(|def| (at, def))
         })
+    }
+
+    /// A file of `defs`, as if read, with `names` read in it.
+    #[cfg(test)]
+    pub(crate) fn of_defs_named<T: Definition>(defs: Vec<T>, names: Names) -> Self {
+        Self {
+            names,
+            ..Self::of_defs(defs)
+        }
     }
 
     /// A file of `defs`, as if read.
@@ -68,7 +100,10 @@ impl DataFile {
                 value: Arc::new(def),
             })
             .collect();
-        Self { entries }
+        Self {
+            entries,
+            names: Names::default(),
+        }
     }
 
     /// Its definition at `at`, if it's of kind `T`.
@@ -96,13 +131,28 @@ impl fmt::Debug for DataFile {
 #[derive(Resource, Clone, Default)]
 pub(crate) struct Kinds(Arc<RwLock<Vec<Kind>>>);
 
+impl Kinds {
+    /// Every kind, read.
+    pub(crate) fn read(&self) -> std::sync::RwLockReadGuard<'_, Vec<Kind>> {
+        self.0.read().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// A kind, to the loader: the files it claims, and how to read one of
 /// its definitions.
 pub(crate) struct Kind {
-    id: TypeId,
-    name: &'static str,
+    pub id: TypeId,
+    pub name: &'static str,
     resolvers: Vec<Box<dyn Resolve>>,
     deserialize: DeserializeFn,
+    /// A definition's id by name, from its file's names: the definition one
+    /// of its kind.
+    label: fn(&(dyn Any + Send + Sync), &Names) -> String,
+    /// The [`Id`]s in a definition, one of its kind, but its own.
+    references: fn(&(dyn Any + Send + Sync)) -> Vec<Reference>,
+    /// Whether there's a definition of the kind whose [`Id`](crate::Id)
+    /// has this hash, families included; `None` if its ids aren't `Id`s.
+    pub contains: fn(&World, u64) -> Option<bool>,
 }
 
 type DeserializeFn = fn(
@@ -143,6 +193,26 @@ impl Kinds {
             deserialize: |deserializer| {
                 erased_serde::deserialize::<T>(deserializer)
                     .map(|def| Box::new(def) as Box<dyn Any + Send + Sync>)
+            },
+            label: |def, names| {
+                def.downcast_ref::<T>()
+                    .map_or_else(String::new, |def| id::label::<T>(def.id(), names))
+            },
+            references: |def| {
+                let mut to = Referenced::default();
+                if let Some(def) = def.downcast_ref::<T>() {
+                    def.references(&mut to);
+                }
+                to.into_found()
+            },
+            contains: |world, hash| {
+                let id: &dyn Any = &Id::<T>::from_hash(hash);
+                let id = id.downcast_ref::<T::Id>()?;
+                Some(
+                    world
+                        .get_resource::<Registry<T>>()
+                        .is_some_and(|registry| registry.has(id)),
+                )
             },
         });
         true
@@ -357,10 +427,9 @@ fn parse(
             ));
         }
     };
-    let FileContents(entries) = format
-        .read(bytes, FileSeed(kind))
-        .map_err(DataFileError::Format)?;
-    Ok(DataFile { entries })
+    let (read, names) = id::naming(|| format.read(bytes, FileSeed(kind)));
+    let FileContents(entries) = read.map_err(DataFileError::Format)?;
+    Ok(DataFile { entries, names })
 }
 
 #[cfg(test)]

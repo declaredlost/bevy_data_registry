@@ -17,10 +17,10 @@ use serde::Deserialize;
 #[derive(Definition, Debug, Clone, Deserialize)]
 #[definition(folder = "weapons")]
 struct Weapon {
-    id: String,
+    id: Id<Weapon>,
     #[definition(base)]
     #[serde(default)]
-    base: Option<String>,
+    base: Option<Id<Weapon>>,
     #[definition(family)]
     #[serde(default)]
     family: bool,
@@ -61,15 +61,21 @@ fn main() -> AppExit {
 
 /// Every weapon, whole; the families aren't among them.
 fn show(weapons: Definitions<Weapon>) {
-    let mut all: Vec<(&String, &Weapon)> = weapons.iter().collect();
-    all.sort_by_key(|(id, _)| *id);
-    for (id, weapon) in all {
+    let mut all: Vec<(&str, &Weapon)> = weapons
+        .iter()
+        .filter_map(|(id, weapon)| Some((weapons.name(id)?, weapon)))
+        .collect();
+    all.sort_by_key(|(name, _)| *name);
+    for (name, weapon) in all {
         info!(
-            "{id}: damage {:?}, speed {:?}, price {:?}",
+            "{name}: damage {:?}, speed {:?}, price {:?}",
             weapon.damage, weapon.speed, weapon.price
         );
     }
-    assert!(weapons.get("blade").is_none(), "a family is never read");
+    assert!(
+        weapons.get(&Id::from_name("blade")).is_none(),
+        "a family is never read"
+    );
 }
 
 fn exit(mut exit: MessageWriter<AppExit>) {

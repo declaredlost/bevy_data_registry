@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `folder`, `extension` or `resolve = ..`.
 - `DataFormat`, a format data files are written in, chosen by extension;
   `Ron` built in, any serde format added in a few lines.
+- `Id<T>`, a typed, `Copy` id hashed from its name, as a kind's own id and
+  a reference to another definition: every reference checked to name a
+  definition, the field named in the error; `Definitions::name` for the
+  name an id was read from. `#[derive(References)]` for types of the
+  app's own holding ids, and `#[definition(unchecked)]` to skip a field.
 - Examples: `basic`, `families`, `validation` and `hot_reload`.
 
 ### Changed

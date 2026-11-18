@@ -17,7 +17,7 @@ use serde::Deserialize;
 #[derive(Definition, Deserialize)]
 #[definition(file = "items")]
 struct Item {
-    id: String,
+    id: Id<Item>,
     price: u32,
 }
 
@@ -40,11 +40,14 @@ fn main() -> AppExit {
 
 /// Every item's price: on load, and after every reload.
 fn show(items: Definitions<Item>) {
-    let mut all: Vec<(&String, &Item)> = items.iter().collect();
-    all.sort_by_key(|(id, _)| *id);
+    let mut all: Vec<(&str, &Item)> = items
+        .iter()
+        .filter_map(|(id, item)| Some((items.name(id)?, item)))
+        .collect();
+    all.sort_by_key(|(name, _)| *name);
     let prices: Vec<String> = all
         .iter()
-        .map(|(id, item)| format!("{id} {}", item.price))
+        .map(|(name, item)| format!("{name} {}", item.price))
         .collect();
     info!("prices: {}", prices.join(", "));
 }

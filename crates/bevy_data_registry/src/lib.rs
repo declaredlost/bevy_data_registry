@@ -8,7 +8,9 @@ mod app;
 mod definition;
 mod file;
 pub mod format;
+mod id;
 mod pipeline;
+mod references;
 mod registry;
 pub mod resolve;
 
@@ -16,21 +18,29 @@ use std::sync::Arc;
 
 use bevy::asset::{AssetApp, AssetPath};
 use bevy::prelude::*;
-pub use bevy_data_registry_macros::Definition;
+pub use bevy_data_registry_macros::{Definition, References};
 
 pub use crate::app::DataApp;
 pub use crate::definition::{Definition, Inherit};
 use crate::file::{DataFile, DataLoader, Kinds};
 use crate::format::{DataFormat, Ron};
+pub use crate::id::Id;
 pub use crate::pipeline::{DataErrors, DataReloaded, DataState, DataSystems};
+pub use crate::references::{Referenced, References};
 pub use crate::registry::Definitions;
 
 /// The most used items: `use bevy_data_registry::prelude::*;`.
 pub mod prelude {
     pub use crate::{
         DataApp, DataErrors, DataRegistryPlugin, DataReloaded, DataState, DataSystems, Definition,
-        Definitions, Inherit,
+        Definitions, Id, Inherit, References,
     };
+}
+
+/// What the derives use. Not part of the API.
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::references::walk::{ViaNothing, ViaReferences, Walk};
 }
 
 /// Loads every data file under [`path`](Self::path) as the kind that

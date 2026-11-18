@@ -9,6 +9,7 @@
 mod finish;
 mod index;
 mod load;
+mod references;
 
 use bevy::asset::AssetPath;
 use bevy::prelude::*;
@@ -40,7 +41,8 @@ pub enum DataSystems {
     /// Checks across kinds, once every kind is indexed: when they've first
     /// loaded without errors, and after every hot reload. Push what's
     /// wrong to [`DataErrors`]: on first load, any stops the app; after a
-    /// reload, they're logged.
+    /// reload, they're logged. Every [`Id`](crate::Id) read in a
+    /// definition is checked here, by the crate.
     Validate,
 }
 
@@ -134,6 +136,7 @@ pub(crate) fn build(app: &mut App, path: AssetPath<'static>) {
                 .chain(),
         )
         .add_systems(Startup, load::load)
+        .add_systems(Update, references::check.in_set(DataSystems::Validate))
         .add_systems(OnEnter(DataState::Failed), finish::exit)
         .add_systems(
             Update,

@@ -26,6 +26,9 @@ pub struct Registry<T: Definition> {
     /// last were). Kept as indexed: a file loaded again isn't read until
     /// it's indexed and validated.
     defs: HashMap<T::Id, Arc<T>>,
+    /// The names of the kind's [`Id`](crate::Id)s, by hash, as read in
+    /// any file: its own and references to it.
+    names: HashMap<u64, Box<str>>,
 }
 
 /// Where a definition is: its file, and its position in it.
@@ -52,15 +55,57 @@ impl<T: Definition> Default for Registry<T> {
         Self {
             locations: HashMap::default(),
             defs: HashMap::default(),
+            names: HashMap::default(),
         }
     }
 }
 
 impl<T: Definition> Registry<T> {
+    /// Whether a definition has this id, families and those not read
+    /// included: whether a reference to it names one.
+    pub(crate) fn has(&self, id: &T::Id) -> bool {
+        self.locations.contains_key(id)
+    }
+
+    /// The name `id` was read from, if it's an [`Id`](crate::Id) and was.
+    pub(crate) fn name(&self, id: &T::Id) -> Option<&str> {
+        let id: &dyn core::any::Any = id;
+        let id = id.downcast_ref::<crate::Id<T>>()?;
+        self.names.get(&id.hash()).map(AsRef::as_ref)
+    }
+
+    /// `id` for messages: by its name if it has one, as it shows if not.
+    fn label(&self, id: &T::Id) -> String {
+        self.name(id)
+            .map_or_else(|| id.to_string(), ToOwned::to_owned)
+    }
+
+    /// Keeps the names of the kind's [`Id`]s read in `files`; returns two
+    /// names with one hash, as errors.
+    fn name_ids(&mut self, files: &[&DataFile]) -> Vec<String> {
+        let mut errors = Vec::new();
+        self.names.clear();
+        for file in files {
+            for (hash, name) in file.names().of(core::any::TypeId::of::<T>()) {
+                match self.names.get(&hash) {
+                    Some(kept) if **kept != *name => errors.push(format!(
+                        "{} ids `{kept}` and `{name}` have the same hash ({hash:#018x}): rename one",
+                        T::NAME
+                    )),
+                    Some(_) => {}
+                    None => {
+                        self.names.insert(hash, name.into());
+                    }
+                }
+            }
+        }
+        errors
+    }
+
     /// Indexes, from scratch, every definition of kind `T` in `files`,
     /// in order, and makes those that build on a family whole. Returns ids
-    /// used twice (the first kept) and families that don't resolve: those
-    /// built on them aren't read.
+    /// used twice (the first kept), two names with one hash, and families
+    /// that don't resolve: those built on them aren't read.
     pub(crate) fn index(
         &mut self,
         files: &[(AssetId<DataFile>, AssetPath<'static>)],
@@ -81,7 +126,8 @@ impl<T: Definition> Registry<T> {
             })
             .collect();
 
-        let mut errors = Vec::new();
+        let all: Vec<&DataFile> = files.iter().filter_map(|(id, _)| assets.get(*id)).collect();
+        let mut errors = self.name_ids(&all);
         self.locations.clear();
         // The first of each id, as kept; later ones are only reported.
         let mut first: HashMap<&T::Id, usize> = HashMap::default();
@@ -92,7 +138,7 @@ impl<T: Definition> Registry<T> {
                 errors.push(format!(
                     "duplicate {} id `{}` in {} and {}",
                     T::NAME,
-                    def.id(),
+                    self.label(def.id()),
                     earlier.describe(earlier_file),
                     location.describe(file),
                 ));
@@ -111,7 +157,8 @@ impl<T: Definition> Registry<T> {
         }
 
         let defs: Vec<&T> = kept.iter().map(|&index| located[index].2).collect();
-        let (mut whole, family_errors) = families::resolve(&defs);
+        let label = |id: &T::Id| self.label(id);
+        let (mut whole, family_errors) = families::resolve(&defs, &label);
         errors.extend(family_errors);
         // What was read before: a definition whose bases stop resolving on
         // a reload stays as it last was, rather than vanishing mid-game.
@@ -237,6 +284,45 @@ mod tests {
         assert!(
             registry.locations.contains_key("orphan"),
             "its path is still known, for messages"
+        );
+    }
+
+    #[test]
+    fn two_names_of_a_kind_with_one_hash_are_an_error() {
+        use core::any::TypeId;
+
+        use crate::id::Names;
+
+        #[derive(crate::Definition, Debug, Deserialize)]
+        #[definition(file = "items")]
+        struct Item {
+            id: crate::Id<Item>,
+        }
+
+        let named = |name: &str| {
+            let mut names = Names::default();
+            names.keep(TypeId::of::<Item>(), 7, name);
+            names.keep(TypeId::of::<Thing>(), 7, "a thing's");
+            names
+        };
+        let mut assets = Assets::<DataFile>::default();
+        let files: Vec<(AssetId<DataFile>, AssetPath<'static>)> = ["sword", "axe"]
+            .into_iter()
+            .enumerate()
+            .map(|(n, name)| {
+                let item = Item {
+                    id: crate::Id::from_name(name),
+                };
+                let file = DataFile::of_defs_named(vec![item], named(name));
+                (assets.add(file).id(), AssetPath::from(format!("{n}.ron")))
+            })
+            .collect();
+        let mut registry = Registry::<Item>::default();
+        let errors = registry.index(&files, &assets);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("Item ids `sword` and `axe` have the same hash"),
+            "{errors:?}"
         );
     }
 

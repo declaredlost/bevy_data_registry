@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod definition;
+mod references;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, Error, parse_macro_input};
@@ -43,6 +44,26 @@ use syn::{DeriveInput, Error, parse_macro_input};
 pub fn derive_definition(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     definition::expand(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Derives `References` for a type a definition holds: its `Id`s checked.
+///
+/// Every field of a type that's `References`, but those marked
+/// `#[definition(unchecked)]`.
+///
+/// ```rust,ignore
+/// #[derive(References, Deserialize)]
+/// struct Drop {
+///     item: Id<Item>,
+///     chance: f32,
+/// }
+/// ```
+#[proc_macro_derive(References, attributes(definition))]
+pub fn derive_references(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    references::expand(&input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }

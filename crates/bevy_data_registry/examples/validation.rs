@@ -1,7 +1,9 @@
-//! Checks across kinds: a system in `DataSystems::Validate` pushes what's
-//! wrong to `DataErrors`. On first load any error fails loading: logged,
-//! `DataState::Failed`, and the app told to exit with an error, which this
-//! example's data is made to do.
+//! Checks across definitions: every `Id` read is checked to name a
+//! definition by the crate, and a system of the app's own in
+//! `DataSystems::Validate` pushes what else is wrong to `DataErrors`. On
+//! first load any error fails loading: logged, `DataState::Failed`, and the
+//! app told to exit with an error, which this example's data is made to
+//! do, twice.
 //!
 //! ```sh
 //! cargo run --example validation
@@ -14,16 +16,16 @@ use serde::Deserialize;
 #[derive(Definition, Deserialize)]
 #[definition(file = "items")]
 struct Item {
-    id: String,
-    #[expect(dead_code, reason = "read from the data, not by this example")]
+    id: Id<Item>,
     price: u32,
 }
 
 #[derive(Definition, Deserialize)]
 #[definition(file = "monsters")]
 struct Monster {
-    id: String,
-    drops: Vec<String>,
+    id: Id<Monster>,
+    /// Each checked to be an item.
+    drops: Vec<Id<Item>>,
 }
 
 fn main() -> AppExit {
@@ -37,7 +39,7 @@ fn main() -> AppExit {
         ))
         .register_definition::<Item>()
         .register_definition::<Monster>()
-        .add_systems(Update, drops_exist.in_set(DataSystems::Validate))
+        .add_systems(Update, priced.in_set(DataSystems::Validate))
         .add_systems(OnEnter(DataState::Loaded), || {
             info!("everything checks out");
         })
@@ -47,18 +49,13 @@ fn main() -> AppExit {
         .run()
 }
 
-/// Every monster's drops are items.
-fn drops_exist(
-    monsters: Definitions<Monster>,
-    items: Definitions<Item>,
-    mut errors: ResMut<DataErrors>,
-) {
-    for (id, monster) in &monsters {
-        for drop in monster.drops.iter().filter(|drop| !items.contains(*drop)) {
-            errors.push(format!(
-                "Monster `{id}` ({}) drops `{drop}`, which isn't an item",
-                monsters.path(id).expect("listed"),
-            ));
-        }
+/// Every item is worth something: a check of the app's own.
+fn priced(items: Definitions<Item>, mut errors: ResMut<DataErrors>) {
+    for (id, _) in items.iter().filter(|(_, item)| item.price == 0) {
+        errors.push(format!(
+            "Item `{}` ({}) is worth nothing",
+            items.name(id).expect("read"),
+            items.path(id).expect("listed"),
+        ));
     }
 }
