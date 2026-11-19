@@ -10,6 +10,11 @@
 </div>
 
 ```ron
+// assets/data/tags.ron
+[
+    (id: "venomous"),
+]
+
 // assets/data/enemies/spider/monsters.ron
 [
     (id: "spider", tags: ["venomous"]),
