@@ -23,8 +23,10 @@ use crate::Definition;
 /// back: what failed them is read.
 ///
 /// ```rust,ignore
+/// const SWORD: Id<Item> = Id::from_name("sword");
+///
 /// fn price(items: Definitions<Item>) {
-///     let sword = items.get("sword").unwrap();
+///     let sword = items.get(&SWORD).unwrap();
 ///     for (id, item) in &items { .. }
 /// }
 /// ```

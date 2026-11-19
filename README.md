@@ -19,18 +19,20 @@
 ```rust,ignore
 #[derive(Definition, Deserialize)]
 #[definition(file = "tags")]
-struct Tag { id: String }
+struct Tag { id: Id<Tag> }
 
 #[derive(Definition, Deserialize)]
 #[definition(file = "monsters", folder = "bestiary")]
-struct Monster { id: String, tags: Vec<String> }
+struct Monster { id: Id<Monster>, tags: Vec<Id<Tag>> } // each checked to be a tag
+
+const SPIDER: Id<Monster> = Id::from_name("spider");
 
 app.add_plugins(DataRegistryPlugin::default())
     .register_definition::<Tag>()
     .register_definition::<Monster>();
 
 fn spawn(monsters: Definitions<Monster>) {
-    let spider = monsters.get("spider");
+    let spider = monsters.get(&SPIDER);
 }
 ```
 

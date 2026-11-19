@@ -96,14 +96,21 @@ impl Folder<'_> {
     }
 
     /// Holds the files its reloads failed on, `failing`: so Bevy reloads
-    /// each when it's saved again.
-    fn hold_failing(&mut self, failing: &[AssetPath<'static>]) {
+    /// each when it's saved again. Returns whether one has loaded already:
+    /// fixed since it failed, with no message to say so.
+    fn hold_failing(&mut self, failing: &[AssetPath<'static>]) -> bool {
+        let mut loaded = false;
         for path in failing {
-            if self.data.holds(path) && !self.data.broken.iter().any(|(held, _)| held == path) {
+            let held = |files: &[(AssetPath, Handle<DataFile>)]| {
+                files.iter().any(|(held, _)| held == path)
+            };
+            if self.data.holds(path) && !held(&self.data.broken) && !held(&self.data.recovered) {
                 let file = self.asset_server.load(path.clone());
+                loaded |= self.asset_server.is_loaded(&file);
                 self.data.broken.push((path.clone(), file));
             }
         }
+        loaded
     }
 
     /// Keeps what's broken and recovered up to date, as `seen`: after a
@@ -391,10 +398,10 @@ pub(super) fn settle(mut folder: Folder, mut messages: Changes, mut pipeline: Pi
     let Some(handle) = folder.handle() else {
         return;
     };
-    let seen = messages.read(&pipeline.files, &folder.data, handle);
-    if pipeline.loaded() {
-        // Added, or changed, and failing the folder's reload with it.
-        folder.hold_failing(&seen.failing);
+    let mut seen = messages.read(&pipeline.files, &folder.data, handle);
+    // Added, or changed, and failing the folder's reload with it.
+    if pipeline.loaded() && folder.hold_failing(&seen.failing) {
+        seen.fixed = true;
     }
     folder.track(&seen);
     if !pipeline.waiting(&seen) {

@@ -16,9 +16,9 @@ use syn::{DeriveInput, Error, parse_macro_input};
 /// #[derive(Definition, Deserialize, Clone)]
 /// #[definition(file = "items", folder = "items")] // at least one rule
 /// struct Item {
-///     id: String, // or any field marked #[definition(id)]
+///     id: Id<Item>, // or any field marked #[definition(id)]
 ///     #[definition(base)]
-///     base: Option<String>,
+///     base: Option<Id<Item>>,
 ///     #[definition(family)]
 ///     #[serde(default)]
 ///     family: bool,
