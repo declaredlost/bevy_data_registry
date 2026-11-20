@@ -49,7 +49,7 @@ bevy_data_registry_macros = { path = "./crates/bevy_data_registry_macros", versi
 # Writing the derive macro
 proc-macro2 = { version = "1.0", default-features = false }
 quote = { version = "1.0", default-features = false }
-syn = { version = "2.0", default-features = false }
+syn = { version = "3.0", default-features = false }
 
 # (De)serialization
 ron = { version = "0.12", features = [] }
