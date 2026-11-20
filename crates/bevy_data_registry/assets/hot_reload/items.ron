@@ -1,0 +1,5 @@
+// Edit a price while the `hot_reload` example runs, then save.
+[
+    (id: "potion", price: 25),
+    (id: "elixir", price: 100),
+]

@@ -1,0 +1,6 @@
+// A family can build on a family: `relic` on `blade`, `excalibur` on
+// `relic`, each made whole in turn.
+[
+    (id: "relic", family: true, base: "blade", price: 1000),
+    (id: "excalibur", base: "relic", damage: 40),
+]

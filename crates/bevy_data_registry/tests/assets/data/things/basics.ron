@@ -1,0 +1,7 @@
+// Under `things/`, Thing's folder: one whole, a family, one built on it,
+// and like another.
+[
+    (id: "pebble", weight: 1),
+    (id: "rocks", family: true, weight: 5),
+    (id: "boulder", base: "rocks", like: "pebble"),
+]

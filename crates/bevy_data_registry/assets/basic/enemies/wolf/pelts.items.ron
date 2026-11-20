@@ -1,0 +1,4 @@
+// Items too: `.items.ron` is Item's extension.
+[
+    (id: "pelt", price: 8),
+]

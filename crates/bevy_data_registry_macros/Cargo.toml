@@ -1,0 +1,26 @@
+# https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[package]
+name = "bevy_data_registry_macros"
+description = "Derive macro for bevy_data_registry definitions"
+keywords = ["bevy", "data", "definitions", "derive"]
+
+version = { workspace = true }
+rust-version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+authors = { workspace = true }
+repository = { workspace = true }
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true, features = ["proc-macro"] }
+quote = { workspace = true, features = ["proc-macro"] }
+syn = { workspace = true, features = ["derive", "full", "parsing", "printing", "proc-macro"] }
+
+[lints]
+workspace = true

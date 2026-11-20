@@ -1,0 +1,2 @@
+// Named for Thing, in any folder: a single definition.
+(id: "flint", base: "rocks", weight: 2)

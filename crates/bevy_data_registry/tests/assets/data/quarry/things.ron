@@ -1,0 +1,5 @@
+// A quarry's things and tags, a file per kind. The rumour names no tag,
+// but isn't checked.
+[
+    (id: "slate", base: "rocks", tags: ["heavy", "smooth"], finds: [(tag: "sharp", rumour: "glowing")]),
+]

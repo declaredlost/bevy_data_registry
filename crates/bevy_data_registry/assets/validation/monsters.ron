@@ -1,0 +1,5 @@
+// `ghost` drops `ectoplasm`, which isn't an item: the crate catches it.
+[
+    (id: "skeleton", drops: ["bone"]),
+    (id: "ghost", drops: ["ectoplasm"]),
+]

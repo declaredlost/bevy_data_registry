@@ -1,0 +1,7 @@
+// `pebble` is like `rocks`, a family: a reference to one fails loading,
+// though building on it doesn't.
+[
+    (id: "rocks", family: true, weight: 5),
+    (id: "boulder", base: "rocks"),
+    (id: "pebble", weight: 1, like: "rocks"),
+]
