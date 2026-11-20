@@ -17,11 +17,12 @@ use super::{DataErrors, DataState};
 pub struct DataReloaded;
 
 /// Ends the first load: loaded, if nothing's wrong; otherwise every
-/// problem logged, and failed ([`exit`] then ends the app).
+/// problem logged, and kept in [`DataErrors`], and failed ([`exit`] then
+/// ends the app, unless that's off).
 pub(super) fn finish_load(
     files: Res<DataFiles>,
     mut progress: ResMut<Progress>,
-    mut errors: ResMut<DataErrors>,
+    errors: Res<DataErrors>,
     mut state: ResMut<NextState<DataState>>,
 ) {
     progress.due = false;
@@ -29,17 +30,20 @@ pub(super) fn finish_load(
         info!("loaded {} data files", files.0.len());
         state.set(DataState::Loaded);
     } else {
-        for error in errors.drain() {
+        for error in errors.iter() {
             error!("{error}");
         }
         state.set(DataState::Failed);
     }
 }
 
-/// Tells the app to exit, as loading failed: on entering
-/// [`DataState::Failed`], so the app's own systems there run first.
-pub(super) fn exit(mut exit: MessageWriter<AppExit>) {
-    exit.write(AppExit::error());
+/// Tells the app to exit, as loading failed: in `Last`, once in
+/// [`DataState::Failed`], so the app's own systems on entering it run
+/// first.
+pub(super) fn exit(mut sent: Local<bool>, mut exit: MessageWriter<AppExit>) {
+    if !core::mem::replace(&mut *sent, true) {
+        exit.write(AppExit::error());
+    }
 }
 
 /// Ends a reload: its problems logged rather than stopping the app, which

@@ -29,9 +29,10 @@ pub enum DataState {
     Loading,
     /// Every file is loaded, indexed and validated.
     Loaded,
-    /// Something was wrong: logged, and the app told to exit on entering
-    /// it. It exits once that frame ends, so systems in
-    /// `OnEnter(DataState::Failed)` still run.
+    /// Something was wrong: logged, and kept in [`DataErrors`]. The app is
+    /// told to exit once systems in `OnEnter(DataState::Failed)` have run,
+    /// unless [`exit_on_failure`](crate::DataRegistryPlugin::exit_on_failure)
+    /// is off.
     Failed,
 }
 
@@ -50,8 +51,9 @@ pub enum DataSystems {
 ///
 /// Files that failed to load, ids used twice, families that don't
 /// resolve, and what [`DataSystems::Validate`] finds. Of the pass under
-/// way: drained, and logged, as it ends, so it reads empty in
-/// `OnEnter(DataState::Failed)` and once [`DataReloaded`] is sent.
+/// way, logged as it ends: kept if it's the first load and it failed, to
+/// read in `OnEnter(DataState::Failed)`; drained after a reload, so it reads
+/// empty once [`DataReloaded`] is sent.
 #[derive(Resource, Debug, Default)]
 pub struct DataErrors(Vec<String>);
 
@@ -115,7 +117,7 @@ fn validating(
 /// Adds the pipeline, loading the folder at `path`: its state and
 /// resources, and its steps in order. Kinds are added on their own (see
 /// [`add_kind`]).
-pub(crate) fn build(app: &mut App, path: AssetPath<'static>) {
+pub(crate) fn build(app: &mut App, path: AssetPath<'static>, exit_on_failure: bool) {
     if !app.is_plugin_added::<StatesPlugin>() {
         app.add_plugins(StatesPlugin);
     }
@@ -137,7 +139,6 @@ pub(crate) fn build(app: &mut App, path: AssetPath<'static>) {
         )
         .add_systems(Startup, load::load)
         .add_systems(Update, references::check.in_set(DataSystems::Validate))
-        .add_systems(OnEnter(DataState::Failed), finish::exit)
         .add_systems(
             Update,
             (
@@ -150,6 +151,10 @@ pub(crate) fn build(app: &mut App, path: AssetPath<'static>) {
                     .run_if(in_state(DataState::Loaded)),
             ),
         );
+    if exit_on_failure {
+        // In `Last`, so every `OnEnter(DataState::Failed)` system has run.
+        app.add_systems(Last, finish::exit.run_if(in_state(DataState::Failed)));
+    }
 }
 
 /// Adds kind `T`'s registry, and indexing it.

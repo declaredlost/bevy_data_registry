@@ -57,6 +57,7 @@ pub mod __private {
 /// app.add_plugins(DataRegistryPlugin {
 ///     path: "mods://data".into(),
 ///     formats: vec![Arc::new(Ron::default()), Arc::new(Json)],
+///     ..default()
 /// });
 /// ```
 #[derive(Clone)]
@@ -68,8 +69,9 @@ pub struct DataRegistryPlugin {
     ///   folder over one none does (`notes.txt`); one another loader reads is
     ///   skipped, with a warning; so is one whose `.meta` names a loader the
     ///   app doesn't have, without one;
-    /// - with `dev`, a file no data format reads, added with a malformed
-    ///   `.meta`, fails the folder's reload until the folder changes again;
+    /// - with `dev`, a file added with a malformed `.meta` fails the folder's
+    ///   reload until the folder changes again, or the file itself does: Bevy
+    ///   may not reload a file when only its `.meta` changes;
     /// - on first load, a file that fails to load fails the folder before the
     ///   files after it are tried, so broken files are reported one at a time;
     /// - with `dev`, a folder in it deleted or moved out while the app runs
@@ -81,6 +83,11 @@ pub struct DataRegistryPlugin {
     /// extension: [`Ron`] by default. At least one, each with an extension:
     /// the plugin panics otherwise.
     pub formats: Vec<Arc<dyn DataFormat>>,
+    /// Whether the app exits, with an error, when loading fails: `true` by
+    /// default. The exit is sent once every `OnEnter(DataState::Failed)`
+    /// system has run, so they can read [`DataErrors`] first; `false`
+    /// leaves ending the app to them, to show what's wrong.
+    pub exit_on_failure: bool,
 }
 
 impl Default for DataRegistryPlugin {
@@ -88,6 +95,7 @@ impl Default for DataRegistryPlugin {
         Self {
             path: AssetPath::from("data"),
             formats: vec![Arc::new(Ron::default())],
+            exit_on_failure: true,
         }
     }
 }
@@ -117,7 +125,7 @@ impl Plugin for DataRegistryPlugin {
                 formats: self.formats.clone(),
                 extensions,
             });
-        pipeline::build(app, self.path.clone());
+        pipeline::build(app, self.path.clone(), self.exit_on_failure);
     }
 }
 

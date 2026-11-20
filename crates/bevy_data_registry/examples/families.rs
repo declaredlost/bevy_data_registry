@@ -52,6 +52,7 @@ fn main() -> AppExit {
                         .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME),
                     ..default()
                 })],
+                ..default()
             },
         ))
         .register_definition::<Weapon>()

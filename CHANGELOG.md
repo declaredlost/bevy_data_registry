@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   definition, the field named in the error; `Definitions::name` for the
   name an id was read from. `#[derive(References)]` for types of the
   app's own holding ids, and `#[definition(unchecked)]` to skip a field.
+- `DataRegistryPlugin::exit_on_failure`: whether the app exits when
+  loading fails (by default, once every `OnEnter(DataState::Failed)`
+  system has run); a failed first load's errors stay in `DataErrors`, to
+  show them there.
 - Examples: `basic`, `families`, `validation` and `hot_reload`.
 
 ### Changed

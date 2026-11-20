@@ -4,8 +4,10 @@
 
 use std::path::Path;
 
-use bevy::asset::io::AssetReaderError;
-use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath, LoadState, LoadedFolder};
+use bevy::asset::io::{AssetReaderError, AssetSourceId};
+use bevy::asset::{
+    AssetLoadError, AssetLoadFailedEvent, AssetPath, AssetServerMode, LoadState, LoadedFolder,
+};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -76,15 +78,28 @@ impl Folder<'_> {
     ///
     /// # Errors
     ///
-    /// If its asset source isn't registered: Bevy only logs that, leaving
-    /// the folder loading forever.
+    /// If its asset source isn't registered, or has no processed reader
+    /// where assets are processed: Bevy only logs that, leaving the folder
+    /// loading forever.
     fn load(&mut self) -> Result<(), String> {
-        let source = self.data.path.source();
-        if self.asset_server.get_source(source).is_err() {
-            return Err(format!(
-                "data folder {}: asset source {source} isn't registered",
+        let id = self.data.path.source();
+        let name = match id {
+            AssetSourceId::Default => "default",
+            AssetSourceId::Name(name) => name,
+        };
+        let error = |problem: &str| {
+            format!(
+                "data folder {}: asset source `{name}` {problem}",
                 self.data.path
-            ));
+            )
+        };
+        let Ok(source) = self.asset_server.get_source(id) else {
+            return Err(error("isn't registered"));
+        };
+        if self.asset_server.mode() == AssetServerMode::Processed
+            && source.processed_reader().is_err()
+        {
+            return Err(error("has no processed reader, and assets are processed"));
         }
         self.data.handle = Some(self.asset_server.load_folder(self.data.path.clone()));
         Ok(())
@@ -116,6 +131,14 @@ impl Folder<'_> {
     /// Keeps what's broken and recovered up to date, as `seen`: after a
     /// listing, and once a broken file loads.
     fn track(&mut self, seen: &Seen) {
+        // Those found gone, loaded again as a listing left them out (below).
+        let asset_server = &self.asset_server;
+        self.data.recovered.retain(|(_, file)| {
+            !matches!(
+                asset_server.load_state(file),
+                LoadState::Failed(error) if is_not_found(&error)
+            )
+        });
         if seen.folder {
             // Those the new listing has are fixed; the rest may have failed
             // after it started, so are held still.
@@ -128,15 +151,16 @@ impl Folder<'_> {
                 .collect();
             self.data.broken.retain(|(path, _)| !listed.contains(path));
             // Those it has are listed. One it hasn't may be gone, or left
-            // out by a scan begun before it loaded: kept until a listing
-            // has it, or it's not found.
+            // out by a scan begun before it loaded: loaded again to tell, as
+            // Bevy doesn't reload a file removed (only its folder). Kept
+            // until a listing has it, or it's not found.
             let asset_server = &self.asset_server;
-            self.data.recovered.retain(|(path, file)| {
-                !listed.contains(path)
-                    && !matches!(
-                        asset_server.load_state(file),
-                        LoadState::Failed(error) if is_not_found(&error)
-                    )
+            self.data.recovered.retain(|(path, _)| {
+                let kept = !listed.contains(path);
+                if kept {
+                    asset_server.reload(path.clone());
+                }
+                kept
             });
         }
         if seen.fixed {

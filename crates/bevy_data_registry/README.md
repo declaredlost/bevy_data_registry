@@ -35,8 +35,9 @@ at any depth, is read.
   precedence.
 - **Loading**: the data folder is loaded on startup, then every kind is
   indexed by id; ids used twice are errors. `DataState` moves to `Loaded`
-  once it is, or to `Failed`, every error logged and the app told to exit.
-  A missing data folder is an error.
+  once it is, or to `Failed`, every error logged and kept in `DataErrors`,
+  and the app told to exit (unless `exit_on_failure` is off). A missing
+  data folder is an error.
 - **Families**: a kind with a `#[definition(base)]` field can build on
   families: a definition takes from its base what it doesn't say
   (`Inherit`). One whose `#[definition(family)]` field is `true` is a
@@ -121,9 +122,9 @@ limits:
   folder over one none does (`notes.txt`). One another loader reads is
   skipped, with a warning; so is one whose `.meta` names a loader the app
   doesn't have, without one.
-- With `dev`, a file no data format reads, added with a malformed
-  `.meta`, fails the folder's reload until the folder changes again: it
-  can't be watched as data.
+- With `dev`, a file added with a malformed `.meta` fails the folder's
+  reload until the folder changes again, or the file itself does: Bevy
+  may not reload a file when only its `.meta` changes.
 - On first load, a file that fails to load fails the folder, before the
   files after it are tried: broken files are reported one at a time.
 - With `dev`, a folder deleted or moved out while the app runs isn't

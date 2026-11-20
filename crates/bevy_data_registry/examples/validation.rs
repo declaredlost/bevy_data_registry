@@ -44,8 +44,11 @@ fn main() -> AppExit {
         .add_systems(OnEnter(DataState::Loaded), || {
             info!("everything checks out");
         })
-        .add_systems(OnEnter(DataState::Failed), || {
-            warn!("loading failed, as this example's data is made to");
+        .add_systems(OnEnter(DataState::Failed), |errors: Res<DataErrors>| {
+            warn!(
+                "loading failed with {} errors, as this example's data is made to",
+                errors.iter().count()
+            );
         })
         .run()
 }
