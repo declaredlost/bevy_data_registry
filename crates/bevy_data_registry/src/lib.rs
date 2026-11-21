@@ -10,6 +10,7 @@ mod file;
 pub mod format;
 mod id;
 mod pipeline;
+mod qualify;
 mod references;
 mod registry;
 pub mod resolve;
@@ -26,6 +27,7 @@ use crate::file::{DataFile, DataLoader, Kinds};
 use crate::format::{DataFormat, Ron};
 pub use crate::id::Id;
 pub use crate::pipeline::{DataErrors, DataReloaded, DataState, DataSystems};
+pub use crate::qualify::{Naming, Qualify};
 pub use crate::references::{Referenced, References};
 pub use crate::registry::Definitions;
 
@@ -88,6 +90,9 @@ pub struct DataRegistryPlugin {
     /// system has run, so they can read [`DataErrors`] first; `false`
     /// leaves ending the app to them, to show what's wrong.
     pub exit_on_failure: bool,
+    /// What the names read from data files stand for, before they're
+    /// hashed into ids: as written, by default (`None`). See [`Qualify`].
+    pub qualify: Option<Arc<dyn Qualify>>,
 }
 
 impl Default for DataRegistryPlugin {
@@ -96,6 +101,7 @@ impl Default for DataRegistryPlugin {
             path: AssetPath::from("data"),
             formats: vec![Arc::new(Ron::default())],
             exit_on_failure: true,
+            qualify: None,
         }
     }
 }
@@ -124,6 +130,7 @@ impl Plugin for DataRegistryPlugin {
                 root: self.path.clone(),
                 formats: self.formats.clone(),
                 extensions,
+                qualify: self.qualify.clone(),
             });
         pipeline::build(app, self.path.clone(), self.exit_on_failure);
     }

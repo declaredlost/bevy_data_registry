@@ -16,6 +16,7 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use crate::Definition;
 use crate::format::DataFormat;
 use crate::id::{self, Id, Names};
+use crate::qualify::Qualify;
 use crate::registry::{Referencing, Registry, Target};
 use crate::resolve::Resolve;
 
@@ -250,6 +251,8 @@ pub(crate) struct DataLoader {
     pub formats: Vec<Arc<dyn DataFormat>>,
     /// Every format's extensions, for Bevy.
     pub extensions: Vec<&'static str>,
+    /// What the names read stand for: as written, if `None`.
+    pub qualify: Option<Arc<dyn Qualify>>,
 }
 
 /// Why a data file couldn't be loaded.
@@ -289,7 +292,7 @@ impl AssetLoader for DataLoader {
         let relative = in_data(&self.root, load_context.path()).ok_or(DataFileError::Outside)?;
         let format = self.format_of(&relative);
         let kinds = self.kinds.0.read().unwrap_or_else(PoisonError::into_inner);
-        parse(format, &relative, &bytes, &kinds)
+        parse(format, &relative, &bytes, &kinds, self.qualify.as_ref())
     }
 
     fn extensions(&self) -> &[&str] {
@@ -355,12 +358,14 @@ impl DataLoader {
 }
 
 /// Reads `bytes`, the file at `path` in the data folder, in `format`, as
-/// the one kind that claims it.
+/// the one kind that claims it: each name read qualified by `qualify`, if
+/// it's set.
 fn parse(
     format: &dyn DataFormat,
     path: &Path,
     bytes: &[u8],
     kinds: &[Kind],
+    qualify: Option<&Arc<dyn Qualify>>,
 ) -> Result<DataFile, DataFileError> {
     let claiming: Vec<(&Kind, &dyn Resolve)> = kinds
         .iter()
@@ -388,7 +393,8 @@ fn parse(
             ));
         }
     };
-    let (read, names) = id::naming(|| format.read(bytes, FileSeed(kind)));
+    let rule = qualify.map(|qualify| (qualify.clone(), Arc::from(path)));
+    let (read, names) = id::naming(rule, || format.read(bytes, FileSeed(kind)));
     let FileContents(entries) = read.map_err(DataFileError::Format)?;
     Ok(DataFile { entries, names })
 }
@@ -399,6 +405,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::format::Ron;
+    use crate::qualify::Naming;
 
     /// A file of `defs`, as if read.
     pub(crate) fn of_defs<T: Definition>(defs: Vec<T>) -> DataFile {
@@ -448,7 +455,13 @@ pub(crate) mod tests {
     fn parse_at(path: &str, source: &str) -> Result<DataFile, DataFileError> {
         let kinds = kinds();
         let kinds = kinds.0.read().unwrap();
-        super::parse(&Ron::default(), Path::new(path), source.as_bytes(), &kinds)
+        super::parse(
+            &Ron::default(),
+            Path::new(path),
+            source.as_bytes(),
+            &kinds,
+            None,
+        )
     }
 
     fn line(error: DataFileError) -> usize {
@@ -490,6 +503,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_rule_qualifies_names_as_of_the_files_path() {
+        #[derive(crate::Definition, Deserialize)]
+        #[definition(file = "loot")]
+        struct Loot {
+            id: Id<Loot>,
+        }
+        let kinds = Kinds::default();
+        add::<Loot>(&kinds);
+        let kinds = kinds.0.read().unwrap();
+        // The file's folder, as the namespace: `spider:fang`.
+        let rule: Arc<dyn Qualify> = Arc::new(|name: &str, naming: &Naming| {
+            let folder = naming.file.parent().and_then(Path::to_str).unwrap_or("?");
+            match name {
+                "" => Err("it's empty".to_owned()),
+                _ => Ok(Some(format!("{folder}:{name}"))),
+            }
+        });
+        let read = |source: &str| {
+            let path = Path::new("spider/loot.ron");
+            super::parse(
+                &Ron::default(),
+                path,
+                source.as_bytes(),
+                &kinds,
+                Some(&rule),
+            )
+        };
+        let file = read(r#"[(id: "fang")]"#).unwrap();
+        let ids: Vec<Id<Loot>> = file.of::<Loot>().map(|(_, loot)| loot.id).collect();
+        assert_eq!(ids, [Id::from_name("spider:fang")]);
+        let name = file.names().get(TypeId::of::<Loot>(), ids[0].hash());
+        assert_eq!(name, Some("spider:fang"));
+        let error = read("[\n    (id: \"fang\"),\n    (id: \"\"),\n]").unwrap_err();
+        assert!(
+            error.to_string().contains("invalid id ``: it's empty"),
+            "{error}"
+        );
+        assert_eq!(line(error), 3);
+    }
+
+    #[test]
     fn a_file_no_kind_claims_lists_what_they_do() {
         let error = parse_at("enemies/notes.ron", "[]").unwrap_err();
         let message = error.to_string();
@@ -525,7 +579,7 @@ pub(crate) mod tests {
         assert!(add::<Other>(&kinds), "registering it doesn't panic");
         let kinds = kinds.0.read().unwrap();
         let error =
-            super::parse(&Ron::default(), Path::new("tags.ron"), b"[]", &kinds).unwrap_err();
+            super::parse(&Ron::default(), Path::new("tags.ron"), b"[]", &kinds, None).unwrap_err();
         assert!(
             matches!(&error, DataFileError::Claimed("Tag", _, "Other", _)),
             "{error}"
@@ -549,6 +603,7 @@ pub(crate) mod tests {
             root: AssetPath::from("data"),
             formats: vec![Arc::new(Plain(&["ron"])), Arc::new(Plain(&["data.ron"]))],
             extensions: Vec::new(),
+            qualify: None,
         };
         let extensions = |path: &str| loader.format_of(Path::new(path)).extensions();
         assert_eq!(extensions("items.ron"), ["ron"]);

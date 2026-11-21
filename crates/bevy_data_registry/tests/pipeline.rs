@@ -9,6 +9,7 @@ use bevy::asset::io::{AssetSource, AssetSourceBuilder};
 use bevy::asset::{AssetMode, AssetPlugin, UntypedAssetLoadFailedEvent};
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
+use bevy_data_registry::Naming;
 use bevy_data_registry::format::{DataFile, DataFormat, FileContents, FileSeed, Ron};
 use bevy_data_registry::prelude::*;
 use bevy_harness::TestApp;
@@ -350,6 +351,15 @@ struct Scratch(tempfile::TempDir);
 /// An app loading a temporary assets folder whose `data/tags.ron` holds the
 /// tag `old`, and what `fill` puts in its `data/`; watching it if `watch`.
 fn scratch(watch: bool, fill: impl FnOnce(&std::path::Path)) -> TestApp {
+    scratch_with(plugin("data"), watch, fill)
+}
+
+/// As [`scratch`], loaded with `plugin`.
+fn scratch_with(
+    plugin: DataRegistryPlugin,
+    watch: bool,
+    fill: impl FnOnce(&std::path::Path),
+) -> TestApp {
     let scratch = tempfile::tempdir().unwrap();
     let data = scratch.path().join("data");
     std::fs::create_dir(&data).unwrap();
@@ -358,7 +368,7 @@ fn scratch(watch: bool, fill: impl FnOnce(&std::path::Path)) -> TestApp {
     // Bevy's watcher matches paths by prefix: macOS's `/var` links to
     // `/private/var`.
     let root = scratch.path().canonicalize().unwrap();
-    let mut app = app(root.to_str().unwrap().to_owned(), plugin("data"), watch);
+    let mut app = app(root.to_str().unwrap().to_owned(), plugin, watch);
     app.world_mut().insert_resource(Scratch(scratch));
     app
 }
@@ -378,6 +388,48 @@ fn a_file_no_loader_reads_fails_loading(app: &mut TestApp) {
 #[bevy_harness::test(setup = loading("nowhere"), timeout = 10)]
 fn a_missing_data_folder_fails_loading(app: &mut TestApp) {
     fails_with(app, &["data folder nowhere"]);
+}
+
+/// Loading `data`, a bare name in it being the base game's: `base:old`.
+fn qualified(fill: impl FnOnce(&std::path::Path)) -> TestApp {
+    let plugin = DataRegistryPlugin {
+        qualify: Some(Arc::new(|name: &str, _: &Naming| {
+            Ok((!name.contains(':')).then(|| format!("base:{name}")))
+        })),
+        ..plugin("data")
+    };
+    scratch_with(plugin, false, fill)
+}
+
+fn a_stone() -> TestApp {
+    qualified(|data| {
+        let stone = r#"[(id: "stone", weight: 1, tags: ["base:old"])]"#;
+        std::fs::write(data.join("things.ron"), stone).unwrap();
+    })
+}
+
+#[bevy_harness::test(setup = a_stone(), timeout = 10)]
+fn a_name_is_its_full_one_written_bare_or_in_full(app: &mut TestApp) {
+    wait(app, "loading ends", |app| state(app) != DataState::Loading);
+    assert_eq!(state(app), DataState::Loaded, "`base:old` names `old`");
+    app.run_system(|things: Definitions<Thing>, tags: Definitions<Tag>| {
+        let stone = Id::from_name("base:stone");
+        assert!(things.get(&stone).is_some());
+        assert_eq!(things.name(&stone), Some("base:stone"));
+        assert_eq!(tags.name(&Id::from_name("base:old")), Some("base:old"));
+        assert!(tags.get(&Id::from_name("old")).is_none(), "not as written");
+    });
+}
+
+fn an_old_tag_twice() -> TestApp {
+    qualified(|data| {
+        std::fs::write(data.join("more.tags.ron"), r#"[(id: "base:old")]"#).unwrap();
+    })
+}
+
+#[bevy_harness::test(setup = an_old_tag_twice(), timeout = 10)]
+fn a_name_written_bare_and_in_full_is_one_id(app: &mut TestApp) {
+    fails_with(app, &["duplicate Tag id `base:old`"]);
 }
 
 #[cfg(unix)]

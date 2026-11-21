@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loading fails (by default, once every `OnEnter(DataState::Failed)`
   system has run); a failed first load's errors stay in `DataErrors`, to
   show them there.
+- `Qualify`, set as `DataRegistryPlugin::qualify`: what the names read
+  from data files stand for, before they're hashed (`stone` as
+  `base:stone`), told the file and the kind; a closure is one too.
 - Examples: `basic`, `families`, `validation` and `hot_reload`.
 
 ### Changed

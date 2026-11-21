@@ -54,6 +54,11 @@ at any depth, is read.
   `get` may not find it after a reload. It shows as its hash; `Definitions::name`
   gives the name it was read from. Two names of a kind with one hash are
   an error. Any other id type works too (`String`), unchecked.
+- **Qualifying**: `DataRegistryPlugin::qualify`, a `Qualify` rule (or a
+  closure), turns each name read from a data file into the id's full name
+  before it's hashed: `stone` into `base:stone`, so both are one id. It's
+  told the file's path and the kind, and may reject a name, failing its
+  file. Ids made in code aren't qualified: write them in full.
 - **Reading**: `Definitions<T>`, a system param, as `Assets<T>` is: `get`,
   `contains`, `iter`, `name`, every definition whole.
 - **Validating**: references are checked by the crate; your other checks
