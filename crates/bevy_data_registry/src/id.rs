@@ -8,11 +8,15 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
+use std::path::Path;
+use std::sync::Arc;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer};
+
+use crate::qualify::{Naming, Qualify};
 
 /// The id of a definition of kind `T`, or a reference to one from another.
 ///
@@ -171,10 +175,19 @@ impl<T: 'static> Visitor<'_> for Named<T> {
     }
 
     fn visit_str<E: de::Error>(self, name: &str) -> Result<Id<T>, E> {
+        // Cloned out, not borrowed: the rule may read ids itself.
+        let rule = READING.with_borrow(|reading| reading.as_ref()?.rule.clone());
+        let full = match rule {
+            Some((qualify, file)) => qualify
+                .qualify(name, &Naming::new(&file, short_type_name::<T>()))
+                .map_err(|reason| E::custom(format!("invalid id `{}`: {reason}", escaped(name))))?,
+            None => None,
+        };
+        let name = full.as_deref().unwrap_or(name);
         let id = Id::from_name(name);
-        NAMES.with_borrow_mut(|names| {
-            if let Some(names) = names {
-                names.keep(TypeId::of::<T>(), id.hash, name);
+        READING.with_borrow_mut(|reading| {
+            if let Some(reading) = reading {
+                reading.names.keep(TypeId::of::<T>(), id.hash, name);
             }
         });
         Ok(id)
@@ -252,27 +265,47 @@ impl Names {
     }
 }
 
+/// A data file being read, on this thread: the names of the ids read in
+/// it, and what they stand for.
+struct Reading {
+    names: Names,
+    /// The rule, and the file's path in the data folder.
+    rule: Option<(Arc<dyn Qualify>, Arc<Path>)>,
+}
+
 thread_local! {
-    /// The names of the ids read on this thread, while a file is.
-    static NAMES: RefCell<Option<Names>> = const { RefCell::new(None) };
+    /// The data file being read on this thread, if one is.
+    static READING: RefCell<Option<Reading>> = const { RefCell::new(None) };
 }
 
 /// Runs `read`, and returns with what it returns the names of every [`Id`]
 /// it read on this thread: a format must read on the thread it's called
-/// on. If `read` panics, the names kept before are kept again.
-pub(crate) fn naming<R>(read: impl FnOnce() -> R) -> (R, Names) {
-    /// Puts back what was kept before, however `read` ends.
-    struct Restore(Option<Names>);
+/// on. Each name is qualified first, if `rule` holds a rule and the file's
+/// path in the data folder. However `read` ends, a panic too, what was
+/// being read before is put back.
+pub(crate) fn naming<R>(
+    rule: Option<(Arc<dyn Qualify>, Arc<Path>)>,
+    read: impl FnOnce() -> R,
+) -> (R, Names) {
+    /// Puts back what was being read before, however `read` ends.
+    struct Restore(Option<Reading>);
     impl Drop for Restore {
         fn drop(&mut self) {
             let outer = self.0.take();
-            NAMES.with_borrow_mut(|names| *names = outer);
+            READING.with_borrow_mut(|reading| *reading = outer);
         }
     }
 
-    let restore = Restore(NAMES.with_borrow_mut(|names| names.replace(Names::default())));
+    let reading = Reading {
+        names: Names::default(),
+        rule,
+    };
+    let restore = Restore(READING.with_borrow_mut(|outer| outer.replace(reading)));
     let result = read();
-    let names = NAMES.with_borrow_mut(Option::take).unwrap_or_default();
+    let names = READING
+        .with_borrow_mut(Option::take)
+        .map(|reading| reading.names)
+        .unwrap_or_default();
     drop(restore);
     (result, names)
 }
@@ -301,7 +334,7 @@ mod tests {
 
     #[test]
     fn the_names_read_are_kept_while_naming() {
-        let (ids, names) = naming(|| {
+        let (ids, names) = naming(None, || {
             serde_json::from_str::<Vec<Id<Item>>>(r#"["pelt", "fang", "pelt"]"#).unwrap()
         });
         assert_eq!(ids.len(), 3);
@@ -310,7 +343,7 @@ mod tests {
         assert_eq!(names.get(item, ids[1].hash()), Some("fang"));
         assert_eq!(names.of(item).count(), 2, "once each");
         assert_eq!(names.get(TypeId::of::<Monster>(), ids[0].hash()), None);
-        let ((), outside) = naming(|| ());
+        let ((), outside) = naming(None, || ());
         assert_eq!(outside.of(item).count(), 0);
     }
 
@@ -332,11 +365,61 @@ mod tests {
     #[test]
     fn a_panic_while_naming_leaves_nothing_named() {
         let caught = std::panic::catch_unwind(|| {
-            naming(|| panic!("a format gave up"));
+            naming(None, || panic!("a format gave up"));
         });
         assert!(caught.is_err());
-        NAMES.with_borrow(|names| assert!(names.is_none(), "restored"));
+        READING.with_borrow(|reading| assert!(reading.is_none(), "restored"));
         let borrowed: Id<Item> = serde_json::from_str(r#""sword""#).unwrap();
         assert_eq!(borrowed, Id::from_name("sword"), "read outside naming");
+    }
+
+    /// Prefixes `base:` to a bare name; rejects one with a space, and
+    /// asserts it's told the file and the kind.
+    fn base(name: &str, naming: &Naming) -> Result<Option<String>, String> {
+        assert_eq!(naming.file, Path::new("items/loot.ron"));
+        assert_eq!(naming.kind, "Item");
+        if name.contains(' ') {
+            return Err("it has a space".into());
+        }
+        Ok((!name.contains(':')).then(|| format!("base:{name}")))
+    }
+
+    fn rule() -> (Arc<dyn Qualify>, Arc<Path>) {
+        (Arc::new(base), Arc::from(Path::new("items/loot.ron")))
+    }
+
+    #[test]
+    fn a_name_read_with_a_rule_is_hashed_and_kept_qualified() {
+        let (ids, names) = naming(Some(rule()), || {
+            serde_json::from_str::<Vec<Id<Item>>>(r#"["pelt", "base:pelt", "other:fang"]"#).unwrap()
+        });
+        assert_eq!(ids[0], Id::from_name("base:pelt"));
+        assert_eq!(ids[1], ids[0], "the same id, written bare or in full");
+        assert_eq!(ids[2], Id::from_name("other:fang"), "kept as written");
+        let item = TypeId::of::<Item>();
+        assert_eq!(names.get(item, ids[0].hash()), Some("base:pelt"));
+        assert_eq!(names.of(item).count(), 2);
+    }
+
+    #[test]
+    fn a_name_a_rule_rejects_fails_reading() {
+        let (read, _) = naming(Some(rule()), || {
+            serde_json::from_str::<Vec<Id<Item>>>("[\n\"pelt\",\n\"a\\nb c\"]")
+        });
+        let error = read.unwrap_err();
+        assert_eq!(error.line(), 3, "where it is");
+        assert!(
+            error
+                .to_string()
+                .starts_with(r"invalid id `a\nb c`: it has a space"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_rule_ends_with_its_files_read() {
+        let ((), _) = naming(Some(rule()), || ());
+        let read: Id<Item> = serde_json::from_str(r#""pelt""#).unwrap();
+        assert_eq!(read, Id::from_name("pelt"));
     }
 }
